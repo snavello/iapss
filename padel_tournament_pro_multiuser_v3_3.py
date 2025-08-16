@@ -1,5 +1,5 @@
-# padel_tournament_pro_multiuser_v3_3_2.py
-# Versión 3.3.2 — Arreglo crítico: evitar KeyError por .format() en CSS (se cambia a f-string).
+# padel_tournament_pro_multiuser_v3_3_4.py
+# Versión 3.3.4 — Revisión global de sintaxis: se corrigen todos los casos potenciales de get("x"])
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -24,7 +24,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — Multiusuario v3.3.2", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — Multiusuario v3.3.4", layout="wide")
 
 # ----------------------------
 # Logo (SVG inline) — esquina superior izquierda
@@ -34,7 +34,6 @@ LIME_GREEN  = "#AEEA00"
 DARK_BLUE   = "#082D63"
 
 def brand_svg(width_px: int = 220) -> str:
-    # Uso de .format aquí es seguro porque no hay llaves de CSS, solo placeholders controlados.
     return """<svg xmlns="http://www.w3.org/2000/svg" width="{w}" viewBox="0 0 660 200" role="img" aria-label="iAPPs PADEL TOURNAMENT">
   <defs>
     <linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
@@ -55,7 +54,6 @@ def brand_svg(width_px: int = 220) -> str:
 
 def render_brand_top_left():
     svg = brand_svg(220)
-    # ⚠️ Cambio a f-string para no usar .format() con CSS (evita KeyError por llaves en CSS)
     st.markdown(
         f"""
         <style>
@@ -649,7 +647,7 @@ def tournament_manager(user: Dict[str, Any], tid: str):
     # PLAYOFFS
     with tab_ko:
         st.subheader("Playoffs (por sets + puntos de oro)")
-        if not state.get("groups") or not state.get("results"]):
+        if not state.get("groups") or not state.get("results"):
             st.info("Necesitas tener zonas y resultados para definir clasificados.")
         else:
             cfg = state["config"]; fmt = cfg.get("format","best_of_3")
@@ -877,5 +875,5 @@ def init_app():
             else:
                 st.error("Rol desconocido.")
 
-st.caption("v3.3.2 — Fix KeyError .format() en CSS; logo; PDFs; KO; autosave.")
+st.caption("v3.3.4 — Corrección global de get('x') vs get('x'] + fixes previos (logo, PDFs, KO, autosave).")
 init_app()
