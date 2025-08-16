@@ -1,5 +1,5 @@
-# padel_tournament_pro_multiuser_v3_3_4.py
-# Versión 3.3.4 — Revisión global de sintaxis: se corrigen todos los casos potenciales de get("x"])
+# padel_tournament_pro_multiuser_v3_3_5.py
+# Versión 3.3.5 — Fix: flujo tras login (st.rerun) + render del logo con st.html para evitar que se vea el SVG como texto.
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -24,7 +24,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — Multiusuario v3.3.4", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — Multiusuario v3.3.5", layout="wide")
 
 # ----------------------------
 # Logo (SVG inline) — esquina superior izquierda
@@ -34,43 +34,45 @@ LIME_GREEN  = "#AEEA00"
 DARK_BLUE   = "#082D63"
 
 def brand_svg(width_px: int = 220) -> str:
-    return """<svg xmlns="http://www.w3.org/2000/svg" width="{w}" viewBox="0 0 660 200" role="img" aria-label="iAPPs PADEL TOURNAMENT">
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width_px}" viewBox="0 0 660 200" role="img" aria-label="iAPPs PADEL TOURNAMENT">
   <defs>
     <linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="{pb}" />
-      <stop offset="100%" stop-color="{db}" />
+      <stop offset="0%" stop-color="{PRIMARY_BLUE}" />
+      <stop offset="100%" stop-color="{DARK_BLUE}" />
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="660" height="200" fill="transparent"/>
   <text x="8" y="65" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="800"
         font-size="74" fill="url(#g1)" letter-spacing="2">iAPP</text>
   <text x="445" y="65" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="900"
-        font-size="72" fill="{lg}">s</text>
+        font-size="72" fill="{LIME_GREEN}">s</text>
   <text x="8" y="125" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="800"
-        font-size="76" fill="{pb}" letter-spacing="4">PADEL</text>
+        font-size="76" fill="{PRIMARY_BLUE}" letter-spacing="4">PADEL</text>
   <text x="8" y="182" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="700"
-        font-size="58" fill="{pb}" letter-spacing="6">TOURNAMENT</text>
-</svg>""".format(w=width_px, pb=PRIMARY_BLUE, db=DARK_BLUE, lg=LIME_GREEN)
+        font-size="58" fill="{PRIMARY_BLUE}" letter-spacing="6">TOURNAMENT</text>
+</svg>"""
 
 def render_brand_top_left():
     svg = brand_svg(220)
-    st.markdown(
-        f"""
-        <style>
-        .brand-wrap {{
-            position: fixed;
-            top: 10px;
-            left: 14px;
-            z-index: 9999;
-        }}
-        @media (max-width: 860px) {{
-            .brand-wrap {{ transform: scale(0.85); transform-origin: top left; }}
-        }}
-        </style>
-        <div class="brand-wrap">{svg}</div>
-        """,
-        unsafe_allow_html=True
-    )
+    html = f"""
+    <style>
+      .brand-wrap {{
+          position: fixed;
+          top: 10px;
+          left: 14px;
+          z-index: 9999;
+      }}
+      @media (max-width: 860px) {{
+          .brand-wrap {{ transform: scale(0.85); transform-origin: top left; }}
+      }}
+    </style>
+    <div class="brand-wrap">{svg}</div>
+    """
+    # Usar st.html para evitar que el HTML/SVG aparezca como texto literal
+    if hasattr(st, "html"):
+        st.html(html)
+    else:
+        st.markdown(html, unsafe_allow_html=True)
 
 # ----------------------------
 # Carpetas y persistencia en JSON local
@@ -327,10 +329,7 @@ def tournament_state_template(admin_username: str, meta: Dict[str, Any]) -> Dict
 # Login
 # ----------------------------
 def login_form():
-    st.markdown("""
-    ### Ingreso
-    Usuario + PIN (6 dígitos)
-    """)
+    st.markdown("### Ingreso — Usuario + PIN (6 dígitos)")
     with st.form("login"):
         username = st.text_input("Usuario").strip()
         pin = st.text_input("PIN (6 dígitos)", type="password").strip()
@@ -345,6 +344,8 @@ def login_form():
             st.error("PIN incorrecto.") ; return
         st.session_state.auth_user = user
         st.success(f"Bienvenido {user['username']} ({user['role']})")
+        # Forzar rerender inmediato para mostrar el panel correspondiente
+        st.rerun()
 
 # ----------------------------
 # Panel del SUPER_ADMIN
@@ -875,5 +876,5 @@ def init_app():
             else:
                 st.error("Rol desconocido.")
 
-st.caption("v3.3.4 — Corrección global de get('x') vs get('x'] + fixes previos (logo, PDFs, KO, autosave).")
+st.caption("v3.3.5 — Fix post-login (st.rerun) + logo con st.html (no se ve texto) + mejoras previas.")
 init_app()
