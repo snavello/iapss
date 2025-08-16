@@ -1,7 +1,5 @@
-
-# padel_tournament_pro_multiuser_v3_3_1.py
-# Versión 3.3.1 — Corrección de f-strings, revisión sintáctica completa y logo integrado.
-
+# padel_tournament_pro_multiuser_v3_3_2.py
+# Versión 3.3.2 — Arreglo crítico: evitar KeyError por .format() en CSS (se cambia a f-string).
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -26,7 +24,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — Multiusuario v3.3.1", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — Multiusuario v3.3.2", layout="wide")
 
 # ----------------------------
 # Logo (SVG inline) — esquina superior izquierda
@@ -36,6 +34,7 @@ LIME_GREEN  = "#AEEA00"
 DARK_BLUE   = "#082D63"
 
 def brand_svg(width_px: int = 220) -> str:
+    # Uso de .format aquí es seguro porque no hay llaves de CSS, solo placeholders controlados.
     return """<svg xmlns="http://www.w3.org/2000/svg" width="{w}" viewBox="0 0 660 200" role="img" aria-label="iAPPs PADEL TOURNAMENT">
   <defs>
     <linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
@@ -56,19 +55,22 @@ def brand_svg(width_px: int = 220) -> str:
 
 def render_brand_top_left():
     svg = brand_svg(220)
+    # ⚠️ Cambio a f-string para no usar .format() con CSS (evita KeyError por llaves en CSS)
     st.markdown(
-        '''<style>
-        .brand-wrap {
+        f"""
+        <style>
+        .brand-wrap {{
             position: fixed;
             top: 10px;
             left: 14px;
             z-index: 9999;
-        }
-        @media (max-width: 860px) {
-            .brand-wrap { transform: scale(0.85); transform-origin: top left; }
-        }
+        }}
+        @media (max-width: 860px) {{
+            .brand-wrap {{ transform: scale(0.85); transform-origin: top left; }}
+        }}
         </style>
-        <div class="brand-wrap">{}</div>'''.format(svg),
+        <div class="brand-wrap">{svg}</div>
+        """,
         unsafe_allow_html=True
     )
 
@@ -327,10 +329,10 @@ def tournament_state_template(admin_username: str, meta: Dict[str, Any]) -> Dict
 # Login
 # ----------------------------
 def login_form():
-    st.markdown('''
+    st.markdown("""
     ### Ingreso
     Usuario + PIN (6 dígitos)
-    ''')
+    """)
     with st.form("login"):
         username = st.text_input("Usuario").strip()
         pin = st.text_input("PIN (6 dígitos)", type="password").strip()
@@ -647,7 +649,7 @@ def tournament_manager(user: Dict[str, Any], tid: str):
     # PLAYOFFS
     with tab_ko:
         st.subheader("Playoffs (por sets + puntos de oro)")
-        if not state.get("groups") or not state.get("results"):
+        if not state.get("groups") or not state.get("results"]):
             st.info("Necesitas tener zonas y resultados para definir clasificados.")
         else:
             cfg = state["config"]; fmt = cfg.get("format","best_of_3")
@@ -875,5 +877,5 @@ def init_app():
             else:
                 st.error("Rol desconocido.")
 
-st.caption("v3.3.1 — Correcciones f-strings + logo iAPPs/PADEL/TOURNAMENT + descargas PDF + KO por sets/GP + autosave.")
+st.caption("v3.3.2 — Fix KeyError .format() en CSS; logo; PDFs; KO; autosave.")
 init_app()
