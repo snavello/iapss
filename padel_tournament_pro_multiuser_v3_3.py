@@ -1,5 +1,7 @@
-# padel_tournament_pro_multiuser_v3_3.py
-# Versión 3.3 — Correcciones de sintaxis, logo integrado y todas las funcionalidades solicitadas.
+
+# padel_tournament_pro_multiuser_v3_3_1.py
+# Versión 3.3.1 — Corrección de f-strings, revisión sintáctica completa y logo integrado.
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -24,7 +26,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — Multiusuario v3.3", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — Multiusuario v3.3.1", layout="wide")
 
 # ----------------------------
 # Logo (SVG inline) — esquina superior izquierda
@@ -34,41 +36,39 @@ LIME_GREEN  = "#AEEA00"
 DARK_BLUE   = "#082D63"
 
 def brand_svg(width_px: int = 220) -> str:
-    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width_px}" viewBox="0 0 660 200" role="img" aria-label="iAPPs PADEL TOURNAMENT">
+    return """<svg xmlns="http://www.w3.org/2000/svg" width="{w}" viewBox="0 0 660 200" role="img" aria-label="iAPPs PADEL TOURNAMENT">
   <defs>
     <linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="{PRIMARY_BLUE}" />
-      <stop offset="100%" stop-color="{DARK_BLUE}" />
+      <stop offset="0%" stop-color="{pb}" />
+      <stop offset="100%" stop-color="{db}" />
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="660" height="200" fill="transparent"/>
   <text x="8" y="65" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="800"
         font-size="74" fill="url(#g1)" letter-spacing="2">iAPP</text>
   <text x="445" y="65" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="900"
-        font-size="72" fill="{LIME_GREEN}">s</text>
+        font-size="72" fill="{lg}">s</text>
   <text x="8" y="125" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="800"
-        font-size="76" fill="{PRIMARY_BLUE}" letter-spacing="4">PADEL</text>
+        font-size="76" fill="{pb}" letter-spacing="4">PADEL</text>
   <text x="8" y="182" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="700"
-        font-size="58" fill="{PRIMARY_BLUE}" letter-spacing="6">TOURNAMENT</text>
-</svg>'''
+        font-size="58" fill="{pb}" letter-spacing="6">TOURNAMENT</text>
+</svg>""".format(w=width_px, pb=PRIMARY_BLUE, db=DARK_BLUE, lg=LIME_GREEN)
 
 def render_brand_top_left():
     svg = brand_svg(220)
     st.markdown(
-        f'''
-        <style>
-        .brand-wrap {{
+        '''<style>
+        .brand-wrap {
             position: fixed;
             top: 10px;
             left: 14px;
             z-index: 9999;
-        }}
-        @media (max-width: 860px) {{
-            .brand-wrap {{ transform: scale(0.85); transform-origin: top left; }}
-        }}
+        }
+        @media (max-width: 860px) {
+            .brand-wrap { transform: scale(0.85); transform-origin: top left; }
+        }
         </style>
-        <div class="brand-wrap">{svg}</div>
-        ''',
+        <div class="brand-wrap">{}</div>'''.format(svg),
         unsafe_allow_html=True
     )
 
@@ -319,18 +319,18 @@ def tournament_state_template(admin_username: str, meta: Dict[str, Any]) -> Dict
         "config": cfg,
         "pairs": pairs,
         "groups": None,
-        "results": [],  # {zone,pair1,pair2,sets[],golden1,golden2}
-        "ko": {"matches": []},  # llaves eliminatorias
+        "results": [],
+        "ko": {"matches": []},
     }
 
 # ----------------------------
 # Login
 # ----------------------------
 def login_form():
-    st.markdown("""
+    st.markdown('''
     ### Ingreso
     Usuario + PIN (6 dígitos)
-    """)
+    ''')
     with st.form("login"):
         username = st.text_input("Usuario").strip()
         pin = st.text_input("PIN (6 dígitos)", type="password").strip()
@@ -754,7 +754,7 @@ def viewer_tournament(tid: str, public: bool=False):
     state = load_tournament(tid)
     if not state:
         st.error("No se encontró el torneo."); return
-    st.subheader(f"{state['meta'].get('t_name')} — {state['meta'].get('place']} — {state['meta'].get('date']} — {state['meta'].get('gender')}")
+    st.subheader(f"{state['meta'].get('t_name')} — {state['meta'].get('place')} — {state['meta'].get('date')} — {state['meta'].get('gender')}")
     tab_over, tab_tables, tab_ko = st.tabs(["👀 General","📊 Tablas","🏁 Playoffs"])
     with tab_over:
         st.write("Parejas"); st.table(pd.DataFrame({"Parejas": state.get("pairs", [])}))
@@ -784,7 +784,7 @@ def export_fixture_pdf(state: Dict[str,Any]) -> Optional[BytesIO]:
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.5*cm, rightMargin=1.5*cm, topMargin=1.5*cm, bottomMargin=1.5*cm)
     styles = getSampleStyleSheet()
     elems = []
-    title = f"Fixture — {state['meta'].get('t_name')} — {state['meta'].get('place']} — {state['meta'].get('date')}"
+    title = f"Fixture — {state['meta'].get('t_name')} — {state['meta'].get('place')} — {state['meta'].get('date')}"
     elems.append(Paragraph(title, styles['Title']))
     elems.append(Spacer(1, 12))
     if not state.get("groups"):
@@ -875,5 +875,5 @@ def init_app():
             else:
                 st.error("Rol desconocido.")
 
-st.caption("v3.3 — Correcciones sintácticas + logo iAPPs/PADEL/TOURNAMENT + descargas PDF robustas + KO por sets/GP + autosave.")
+st.caption("v3.3.1 — Correcciones f-strings + logo iAPPs/PADEL/TOURNAMENT + descargas PDF + KO por sets/GP + autosave.")
 init_app()
