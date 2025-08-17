@@ -6,7 +6,7 @@
 # 4) Configuración: se elimina la visualización del JSON de “Datos del torneo”.
 # 5) Resultados: persiste al grabar (ya lo hacía) y resalta al ganador con ícono/tarjeta.
 # 6) Estados “A definir”: si una zona o fases KO no están completas, mostrar “A definir” hasta que todo esté cargado (incluye final).
-# 7) Tablas: zebra striping (gris/blanco) y encabezado oscuro.
+# 7) Tablas: zebra striping (gri s/blanco) y encabezado oscuro.
 # 8) Persistencia: nombre del JSON = ID + nombre + fecha + timestamp (YYYYMMDD_HHMMSS).
 
 import streamlit as st
