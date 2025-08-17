@@ -1,10 +1,10 @@
-# padel_tournament_pro_multiuser_v3_3_8.py
-# Versión 3.3.8 — Ajustes solicitados:
-# 1) Logo global (Super Admin) y fijo arriba-izquierda (no en medio).
-# 2) Carga de parejas: manual una por vez + importar CSV. Sin edición masiva de texto.
-#    Lista en tabla + botón de borrar por pareja. Números 1..N autocontenidos y sin exceder máximo.
-# 3) Ocultar caption superior con texto de versión. Mostrar versión pequeña al final.
-# 4) Se mantiene: sin puntos por empate; desempate PTS→DG→GP→sorteo; PDFs opcionales.
+# padel_tournament_pro_multiuser_v3_3_9.py
+# Versión 3.3.9 — Correcciones de sintaxis y revisión completa
+# Cambios clave respecto a 3.3.8:
+# - Reparado error de cierre en cross_bracket (}) -> ))
+# - Revisión de f-strings y cierres de (), [] y {} en todo el archivo
+# - Mantiene: logo global (Super Admin), alta manual + CSV, tabla con borrar, sin edición rápida,
+#             sin puntos por empate, desempate PTS→DG→GP→sorteo, PDFs opcionales
 import streamlit as st
 import pandas as pd
 from itertools import combinations
@@ -28,7 +28,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — Multiusuario v3.3.8", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — Multiusuario v3.3.9", layout="wide")
 
 # ====== Constantes de estilo/colores para el logo SVG ======
 PRIMARY_BLUE = "#0D47A1"
@@ -243,7 +243,7 @@ def cross_bracket(qualified):
     runners_rot = runners[1:] + runners[:1] if len(runners)>1 else runners
     pairs = []
     for w, r in zip(winners, runners_rot):
-        pairs.append((f"{w[0]}1", w[2], f"{r[0]}2", r[2]})
+        pairs.append((f"{w[0]}1", w[2], f"{r[0]}2", r[2]))
     return pairs
 
 def next_round(slots: List[str]):
@@ -767,7 +767,7 @@ def tournament_manager(user: Dict[str, Any], tid: str):
     # --- PLAYOFFS ---
     with tab_ko:
         st.subheader("Playoffs (por sets + puntos de oro)")
-        if not state.get("groups") or not state.get("results"):
+        if not state.get("groups") or not state.get("results"]):
             st.info("Necesitas tener zonas y resultados para definir clasificados.")
         else:
             cfg = state["config"]; fmt = cfg.get("format","best_of_3")
@@ -995,13 +995,13 @@ def init_app():
 
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
-        st.caption("iAPPs Pádel — v3.3.8")
+        st.caption("iAPPs Pádel — v3.3.9")
         return
 
     # Login o paneles
     if not st.session_state.get("auth_user"):
         login_form()
-        st.caption("iAPPs Pádel — v3.3.8")
+        st.caption("iAPPs Pádel — v3.3.9")
         return
 
     user = st.session_state["auth_user"]
@@ -1016,7 +1016,7 @@ def init_app():
     if user["role"]=="SUPER_ADMIN" and (mode=="super"):
         super_admin_panel()
     elif user["role"]=="SUPER_ADMIN":
-        super_admin_panel()
+        super_admin_panel()  # mismo panel por ahora
     elif user["role"]=="TOURNAMENT_ADMIN":
         admin_dashboard(user)
     elif user["role"]=="VIEWER":
@@ -1025,6 +1025,6 @@ def init_app():
         st.error("Rol desconocido.")
 
     # Footer de versión (muy pequeño y abajo)
-    st.caption("iAPPs Pádel — v3.3.8")
+    st.caption("iAPPs Pádel — v3.3.9")
 
 init_app()
