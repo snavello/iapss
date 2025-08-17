@@ -3,7 +3,7 @@
 # - Fix definitivo StreamlitAPIException al limpiar inputs (uso de flags + rerun).
 # - Logo RAW de GitHub preconfigurado por defecto y editable en Super Admin.
 # - Barra superior fija con logo (máx 20% ancho), usuario/rol y botón de logout.
-# - Menú sticky, tablas con zebra + header oscuro.
+# - Menú sticky, tablas con zebra + headear oscuro.
 # - Regla de desempate: PTS > DG > GP > random (semilla).
 # - Sin puntos por empate; formatos: one_set, best_of_3, best_of_5.
 # - Persistencia JSON con nombre: ID + nombre + fecha + timestamp.
