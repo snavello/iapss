@@ -1,6 +1,10 @@
-# padel_tournament_pro_multiuser_v3_3_7.py
-# Versión 3.3.7 — Código completo.
-# Cambios desde 3.3.6: igual funcionalidad, empaquetado correcto y limpieza menor.
+# padel_tournament_pro_multiuser_v3_3_8.py
+# Versión 3.3.8 — Ajustes solicitados:
+# 1) Logo global (Super Admin) y fijo arriba-izquierda (no en medio).
+# 2) Carga de parejas: manual una por vez + importar CSV. Sin edición masiva de texto.
+#    Lista en tabla + botón de borrar por pareja. Números 1..N autocontenidos y sin exceder máximo.
+# 3) Ocultar caption superior con texto de versión. Mostrar versión pequeña al final.
+# 4) Se mantiene: sin puntos por empate; desempate PTS→DG→GP→sorteo; PDFs opcionales.
 import streamlit as st
 import pandas as pd
 from itertools import combinations
@@ -24,71 +28,16 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — Multiusuario v3.3.7", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — Multiusuario v3.3.8", layout="wide")
 
-# ====== Logo (SVG inline) — esquina superior izquierda con opción URL ======
+# ====== Constantes de estilo/colores para el logo SVG ======
 PRIMARY_BLUE = "#0D47A1"
 LIME_GREEN  = "#AEEA00"
 DARK_BLUE   = "#082D63"
 
-def brand_svg(width_px: int = 220) -> str:
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width_px}" viewBox="0 0 660 200" role="img" aria-label="iAPPs PADEL TOURNAMENT">
-  <defs>
-    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="{PRIMARY_BLUE}" />
-      <stop offset="100%" stop-color="{DARK_BLUE}" />
-    </linearGradient>
-  </defs>
-  <rect x="0" y="0" width="660" height="200" fill="transparent"/>
-  <text x="8" y="65" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="800"
-        font-size="74" fill="url(#g1)" letter-spacing="2">iAPP</text>
-  <text x="445" y="65" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="900"
-        font-size="72" fill="{LIME_GREEN}">s</text>
-  <text x="8" y="125" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="800"
-        font-size="76" fill="{PRIMARY_BLUE}" letter-spacing="4">PADEL</text>
-  <text x="8" y="182" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="700"
-        font-size="58" fill="{PRIMARY_BLUE}" letter-spacing="6">TOURNAMENT</text>
-</svg>"""
-
-def render_brand_top_left(logo_url: Optional[str] = None):
-    # Si hay URL pública, usar st.image para evitar HTML crudo
-    if logo_url:
-        st.markdown(
-            """
-            <style>
-              .brand-wrap-img {
-                  position: fixed; top: 10px; left: 14px; z-index: 9999;
-              }
-              @media (max-width: 860px) {.brand-wrap-img{ transform: scale(0.85); transform-origin: top left; }}
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-        # Truco: usar un contenedor vacío para reservar el espacio y luego renderizar imagen
-        st.markdown('<div class="brand-wrap-img"></div>', unsafe_allow_html=True)
-        st.image(logo_url, width=220)
-        return
-
-    # Fallback SVG inline
-    svg = brand_svg(220)
-    html = f"""
-    <style>
-      .brand-wrap {{
-          position: fixed; top: 10px; left: 14px; z-index: 9999;
-      }}
-      @media (max-width: 860px) {{
-          .brand-wrap {{ transform: scale(0.85); transform-origin: top left; }}
-      }}
-    </style>
-    <div class="brand-wrap">{svg}</div>
-    """
-    if hasattr(st, "html"):
-        st.html(html)
-    else:
-        st.markdown(html, unsafe_allow_html=True)
-
 # ====== Carpetas y persistencia ======
 DATA_DIR = Path("data")
+APP_CONFIG_PATH = DATA_DIR / "app_config.json"   # NUEVO: configuración global (logo_url)
 USERS_PATH = DATA_DIR / "users.json"
 TOURN_DIR = DATA_DIR / "tournaments"
 SNAP_ROOT = TOURN_DIR / "snapshots"
@@ -101,6 +50,23 @@ SNAP_ROOT.mkdir(parents=True, exist_ok=True)
 
 sha = lambda s: hashlib.sha256(s.encode("utf-8")).hexdigest()
 now_iso = lambda: datetime.now().isoformat()
+
+# ====== Config App (global) ======
+DEFAULT_APP_CONFIG = {
+    "app_logo_url": ""  # URL pública del logo de la aplicación (opcional). Si vacío, se usa el SVG embebido.
+}
+
+def load_app_config() -> Dict[str, Any]:
+    if not APP_CONFIG_PATH.exists():
+        APP_CONFIG_PATH.write_text(json.dumps(DEFAULT_APP_CONFIG, indent=2), encoding="utf-8")
+        return DEFAULT_APP_CONFIG.copy()
+    try:
+        return json.loads(APP_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return DEFAULT_APP_CONFIG.copy()
+
+def save_app_config(cfg: Dict[str, Any]):
+    APP_CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 # ====== Usuarios ======
 DEFAULT_SUPER = {"username": "ADMIN", "pin_hash": sha("199601"), "role": "SUPER_ADMIN",
@@ -176,8 +142,7 @@ DEFAULT_CONFIG = {
     "points_win": 2,
     "points_loss": 0,
     "seed": 42,
-    "format": "best_of_3",  # one_set | best_of_3 | best_of_5
-    "logo_url": ""          # opcional: URL pública del logo
+    "format": "best_of_3"  # one_set | best_of_3 | best_of_5
 }
 
 rng = lambda off, seed: random.Random(int(seed) + int(off))
@@ -278,7 +243,7 @@ def cross_bracket(qualified):
     runners_rot = runners[1:] + runners[:1] if len(runners)>1 else runners
     pairs = []
     for w, r in zip(winners, runners_rot):
-        pairs.append((f"{w[0]}1", w[2], f"{r[0]}2", r[2]))
+        pairs.append((f"{w[0]}1", w[2], f"{r[0]}2", r[2]})
     return pairs
 
 def next_round(slots: List[str]):
@@ -287,6 +252,53 @@ def next_round(slots: List[str]):
         if i+1 < len(slots): out.append((slots[i], slots[i+1])); i+=2
         else: out.append((slots[i], None)); i+=1
     return out
+
+# ====== Branding (logo arriba-izquierda fijo) ======
+def brand_svg(width_px: int = 220) -> str:
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width_px}" viewBox="0 0 660 200" role="img" aria-label="iAPPs PADEL TOURNAMENT">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="{PRIMARY_BLUE}" />
+      <stop offset="100%" stop-color="{DARK_BLUE}" />
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="660" height="200" fill="transparent"/>
+  <text x="8" y="65" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="800"
+        font-size="74" fill="url(#g1)" letter-spacing="2">iAPP</text>
+  <text x="445" y="65" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="900"
+        font-size="72" fill="{LIME_GREEN}">s</text>
+  <text x="8" y="125" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="800"
+        font-size="76" fill="{PRIMARY_BLUE}" letter-spacing="4">PADEL</text>
+  <text x="8" y="182" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="700"
+        font-size="58" fill="{PRIMARY_BLUE}" letter-spacing="6">TOURNAMENT</text>
+</svg>"""
+
+def render_brand_top_left():
+    app_cfg = load_app_config()
+    url = (app_cfg or {}).get("app_logo_url", "").strip()
+    if url:
+        html = f"""
+        <style>
+          .brand-fixed {{
+            position: fixed; top: 8px; left: 12px; z-index: 10000;
+            pointer-events: none; /* no bloquea clics en UI */
+          }}
+        </style>
+        <div class="brand-fixed"><img src="{url}" width="220"/></div>
+        """
+        st.markdown(html, unsafe_allow_html=True)
+    else:
+        svg = brand_svg(220)
+        html = f"""
+        <style>
+          .brand-fixed {{
+            position: fixed; top: 8px; left: 12px; z-index: 10000;
+            pointer-events: none;
+          }}
+        </style>
+        <div class="brand-fixed">{svg}</div>
+        """
+        st.markdown(html, unsafe_allow_html=True)
 
 # ====== Sesión ======
 def init_session():
@@ -321,6 +333,37 @@ def tournament_state_template(admin_username: str, meta: Dict[str, Any]) -> Dict
         "ko": {"matches": []},
     }
 
+# ====== Utilidades parejas ======
+def parse_pair_number(label: str) -> Optional[int]:
+    # Formato esperado: "NN — Nombre1 / Nombre2"
+    try:
+        left = label.split("—", 1)[0].strip()
+        return int(left)
+    except Exception:
+        return None
+
+def next_available_number(pairs: List[str], max_pairs: int) -> Optional[int]:
+    used = set()
+    for p in pairs:
+        n = parse_pair_number(p)
+        if n is not None:
+            used.add(n)
+    for n in range(1, max_pairs+1):
+        if n not in used:
+            return n
+    return None  # lleno
+
+def format_pair_label(n: int, j1: str, j2: str) -> str:
+    return f"{n:02d} — {j1.strip()} / {j2.strip()}"
+
+def remove_pair_by_number(pairs: List[str], n: int) -> List[str]:
+    out = []
+    for p in pairs:
+        pn = parse_pair_number(p)
+        if pn != n:
+            out.append(p)
+    return out
+
 # ====== Login ======
 def login_form():
     st.markdown("### Ingreso — Usuario + PIN (6 dígitos)")
@@ -344,6 +387,16 @@ def login_form():
 def super_admin_panel():
     st.header("Panel de ADMIN (Super Admin)")
     users = load_users()
+
+    with st.expander("🎨 Apariencia (Logo global de la app)", expanded=True):
+        app_cfg = load_app_config()
+        url = st.text_input("URL pública del logotipo de la aplicación (no por torneo)", value=app_cfg.get("app_logo_url","")).strip()
+        if st.button("Guardar logo global", type="primary"):
+            app_cfg["app_logo_url"] = url
+            save_app_config(app_cfg)
+            st.success("Logo global guardado. (Refrescá la página si no lo ves de inmediato)")
+        st.caption("Sugerencia: usa el vínculo RAW de GitHub u otro hosting público.")
+
     with st.expander("➕ Crear usuario"):
         c1,c2,c3 = st.columns(3)
         with c1: u = st.text_input("Username nuevo").strip()
@@ -360,6 +413,7 @@ def super_admin_panel():
             else:
                 set_user({"username":u,"pin_hash":sha(pin),"role":role,"assigned_admin":assigned_admin,"created_at":now_iso(),"active":True})
                 st.success(f"Usuario {u} creado.")
+
     st.subheader("Usuarios")
     for usr in users:
         with st.container(border=True):
@@ -452,9 +506,7 @@ def tournament_manager(user: Dict[str, Any], tid: str):
     state = load_tournament(tid)
     if not state: st.error("No se encontró el torneo."); return
 
-    # Logo (con URL si está configurada)
-    logo_url = state.get("config", {}).get("logo_url") or ""
-    render_brand_top_left(logo_url if logo_url.strip() else None)
+    render_brand_top_left()  # usa logo global
 
     tab_cfg, tab_pairs, tab_results, tab_tables, tab_ko, tab_persist = st.tabs(
         ["⚙️ Configuración", "👥 Parejas", "📝 Resultados", "📊 Tablas", "🗂️ Playoffs", "💾 Persistencia"]
@@ -471,7 +523,7 @@ def tournament_manager(user: Dict[str, Any], tid: str):
         c1,c2,c3,c4 = st.columns(4)
         with c1:
             cfg["t_name"] = st.text_input("Nombre para mostrar", value=cfg.get("t_name","Open Pádel"))
-            cfg["num_pairs"] = st.number_input("Cantidad total de parejas", 2, 256, int(cfg.get("num_pairs",16)), step=1)
+            cfg["num_pairs"] = st.number_input("Cantidad máxima de parejas", 2, 256, int(cfg.get("num_pairs",16)), step=1)
         with c2:
             cfg["num_zones"] = st.number_input("Cantidad de zonas", 2, 32, int(cfg.get("num_zones",4)), step=1)
             cfg["top_per_zone"] = st.number_input("Clasifican por zona (Top N)", 1, 8, int(cfg.get("top_per_zone",2)), step=1)
@@ -482,12 +534,11 @@ def tournament_manager(user: Dict[str, Any], tid: str):
             cfg["seed"] = st.number_input("Semilla (sorteo zonas)", 1, 999999, int(cfg.get("seed",42)), step=1)
         fmt = st.selectbox("Formato de partido", ["one_set","best_of_3","best_of_5"], index=["one_set","best_of_3","best_of_5"].index(cfg.get("format","best_of_3")))
         cfg["format"] = fmt
-        cfg["logo_url"] = st.text_input("URL pública del logotipo (opcional)", value=cfg.get("logo_url","")).strip()
 
         cA,cB,cC = st.columns(3)
         with cA:
             if st.button("💾 Guardar configuración", type="primary"):
-                state["config"] = {k:int(v) if isinstance(v,(int,float)) and k not in ["t_name","logo_url","format"] else v for k,v in cfg.items()}
+                state["config"] = {k:int(v) if isinstance(v,(int,float)) and k not in ["t_name","format"] else v for k,v in cfg.items()}
                 save_tournament(tid, state); st.success("Configuración guardada.")
         with cB:
             if st.button("🎲 Sortear zonas (crear/rehacer fixture)"):
@@ -528,40 +579,43 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                 st.session_state.pdf_generated_at = None
                 st.success("Limpio.")
 
-    # --- PAREJAS (manual + CSV) ---
+    # --- PAREJAS (manual + CSV; sin edición rápida) ---
     with tab_pairs:
         st.subheader("Parejas")
         pairs = state.get("pairs", [])
+        max_pairs = int(state.get("config", {}).get("num_pairs", 16))
 
-        # Alta manual individual
+        # Alta manual individual (con control de máximo y numeración 1..N)
         st.markdown("**Alta manual — una pareja por vez**")
-        n_auto = len(pairs) + 1
+        next_n = next_available_number(pairs, max_pairs)
         c1,c2,c3,c4 = st.columns([1,3,3,2])
         with c1:
-            st.text_input("N° pareja (auto)", value=str(n_auto), disabled=True, key=f"num_auto_{tid}")
+            st.text_input("N° pareja", value=(str(next_n) if next_n else "—"), disabled=True, key=f"num_auto_{tid}")
         with c2:
             p1 = st.text_input("Jugador 1", key=f"p1_{tid}")
         with c3:
             p2 = st.text_input("Jugador 2", key=f"p2_{tid}")
         with c4:
-            if st.button("➕ Agregar pareja", key=f"add_pair_{tid}", type="primary"):
+            disabled_btn = (next_n is None)
+            if st.button("➕ Agregar pareja", key=f"add_pair_{tid}", type="primary", disabled=disabled_btn):
                 p1c, p2c = (p1 or "").strip(), (p2 or "").strip()
                 if not p1c or not p2c:
-                    st.error("Completá ambos nombres."); 
+                    st.error("Completá ambos nombres.")
                 else:
-                    label = f"{n_auto:02d} — {p1c} / {p2c}"
+                    label = format_pair_label(next_n, p1c, p2c)
                     pairs.append(label)
                     state["pairs"] = pairs
-                    state["config"]["num_pairs"] = len(pairs)
                     save_tournament(tid, state)
                     st.success(f"Agregada: {label}")
                     st.experimental_rerun()
+        if next_n is None:
+            st.warning(f"Se alcanzó el máximo de parejas configurado ({max_pairs}). Podés borrar alguna o aumentar el máximo en Configuración.")
 
         st.divider()
 
-        # Importar CSV
+        # Importar CSV con control de máximo
         st.markdown("**Importar CSV (opcional)**")
-        st.caption("Formato: columnas `numero, jugador1, jugador2`. Ejemplo: `1, Juan Perez, Luis Diaz`")
+        st.caption("Formato: columnas `numero, jugador1, jugador2`. Ejemplo: `1, Juan Perez, Luis Diaz`.")
         up = st.file_uploader("Seleccionar CSV", type=["csv"], key=f"csv_{tid}")
         if up is not None:
             try:
@@ -574,7 +628,8 @@ def tournament_manager(user: Dict[str, Any], tid: str):
             if "numero" not in df.columns or "jugador1" not in df.columns or "jugador2" not in df.columns:
                 st.error("El CSV debe contener columnas: numero, jugador1, jugador2")
             else:
-                new_list = []
+                # Convertir a lista formateada y respetar el máximo
+                parsed = []
                 for _, row in df.iterrows():
                     try:
                         num = int(row["numero"])
@@ -582,51 +637,54 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                         continue
                     j1 = str(row["jugador1"]).strip()
                     j2 = str(row["jugador2"]).strip()
-                    if j1 and j2:
-                        new_list.append(f"{num:02d} — {j1} / {j2}")
-                if new_list:
-                    new_list.sort(key=lambda x: int(x.split("—")[0].strip()))
-                    state["pairs"] = new_list
-                    state["config"]["num_pairs"] = len(new_list)
-                    save_tournament(tid, state)
-                    st.success(f"Importadas {len(new_list)} parejas.")
-                    st.experimental_rerun()
+                    if j1 and j2 and num >= 1:
+                        parsed.append((num, j1, j2))
+                if parsed:
+                    # Normalizar a 1..max_pairs sin exceder
+                    parsed.sort(key=lambda x: x[0])
+                    # Reemplazar por completo la lista actual con recorte al máximo
+                    new_list = []
+                    used = set()
+                    for num, j1, j2 in parsed:
+                        if len(new_list) >= max_pairs:
+                            break
+                        if 1 <= num <= max_pairs and num not in used:
+                            used.add(num)
+                            new_list.append(format_pair_label(num, j1, j2))
+                    # Si sobran huecos (1..max) por números faltantes, no rellenamos automáticamente aquí.
+                    if not new_list:
+                        st.warning("El CSV no contenía filas válidas dentro del rango permitido.")
+                    else:
+                        state["pairs"] = new_list
+                        save_tournament(tid, state)
+                        st.success(f"Importadas {len(new_list)} parejas (máximo {max_pairs}).")
+                        st.experimental_rerun()
                 else:
                     st.warning("No se encontraron filas válidas en el CSV.")
 
         st.divider()
 
-        # Edición masiva (texto)
-        st.markdown("**Edición rápida (texto)**")
-        pairs_text = "\n".join(pairs)
-        pairs_text_new = st.text_area("Editar (una línea por pareja) — Ej: `01 — Nombre1 / Nombre2`", value=pairs_text, height=200)
-        c1,c2,c3 = st.columns(3)
-        with c1:
-            if st.button("💾 Guardar listado"):
-                parsed = [p.strip() for p in pairs_text_new.splitlines() if p.strip()]
-                state["pairs"] = parsed
-                state["config"]["num_pairs"] = len(parsed)
-                save_tournament(tid, state)
-                st.success(f"Guardadas {len(parsed)} parejas.")
-        with c2:
-            if st.button("⬇️ Exportar CSV"):
-                rows = []
-                for line in state.get("pairs", []):
-                    try:
-                        numero_part, rest = line.split("—", 1)
-                        jj = rest.split("/", 1)
-                        j1 = jj[0].strip(); j2 = jj[1].strip() if len(jj)>1 else ""
-                        numero = int(numero_part.strip())
-                    except Exception:
-                        numero = None; j1=line; j2=""
-                    rows.append({"numero":numero, "jugador1":j1, "jugador2":j2})
-                df = pd.DataFrame(rows)
-                st.download_button("Descargar CSV", df.to_csv(index=False).encode("utf-8"),
-                                   file_name="parejas.csv", mime="text/csv")
-        with c3:
-            if st.button("🗑 Vaciar listado"):
-                state["pairs"] = []; state["config"]["num_pairs"] = 0
-                save_tournament(tid, state); st.success("Listado vacío.")
+        # Tabla de parejas + botón borrar por fila
+        if pairs:
+            st.markdown("### Listado de parejas")
+            # Mostrar tabla sencilla
+            df_pairs = pd.DataFrame({"Pareja": pairs})
+            st.table(df_pairs)
+            # Botones de borrado
+            st.markdown("**Borrar pareja:**")
+            cols = st.columns(4)
+            per_row = 4
+            for i, label in enumerate(pairs):
+                n = parse_pair_number(label) or (i+1)
+                col = cols[i % per_row]
+                with col:
+                    if st.button(f"🗑️ Nº {n}", key=f"del_{tid}_{n}"):
+                        state["pairs"] = remove_pair_by_number(pairs, n)
+                        save_tournament(tid, state)
+                        st.success(f"Eliminada pareja Nº {n}.")
+                        st.experimental_rerun()
+        else:
+            st.info("Aún no hay parejas cargadas.")
 
         # Zonas actuales
         if state.get("groups"):
@@ -763,7 +821,7 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                             with gD:
                                 g2 = st.number_input(f"Puntos de oro {m['b']}", 0, 200, int(m.get("goldenB",0)), key=f"ko_g2_{tid}_{rname}_{idx}")
                             if st.button("Guardar partido KO", key=f"ko_sv_{tid}_{rname}_{idx}"):
-                                # En KO, si empatan en sets, se resuelve por sorteo automático
+                                # En KO, si empatan en sets, sorteo automático
                                 stats = compute_sets_stats(new_sets)
                                 if stats["sets1"] == stats["sets2"]:
                                     rr = rng(9000+idx, cfg["seed"]); winner = rr.choice([m['a'], m['b']])
@@ -816,15 +874,23 @@ def tournament_manager(user: Dict[str, Any], tid: str):
     elif not st.session_state.autosave:
         st.session_state.last_hash = current_hash
 
-# ====== Viewer (consulta/público) ======
+# ====== Viewer (consulta) ======
+def viewer_dashboard(user: Dict[str, Any]):
+    render_brand_top_left()
+    st.header(f"Vista de consulta — {user['username']}")
+    if not user.get("assigned_admin"): st.warning("No asignado a un admin."); return
+    my = load_index_for_admin(user["assigned_admin"])
+    if not my: st.info("El admin asignado no tiene torneos."); return
+    names = [f"{t['date']} — {t['t_name']} ({t['gender']}) — {t['place']} — ID:{t['tournament_id']}" for t in my]
+    selected = st.selectbox("Selecciona un torneo para ver", names, index=0)
+    sel = my[names.index(selected)]
+    viewer_tournament(sel["tournament_id"])
+
 def viewer_tournament(tid: str, public: bool=False):
+    render_brand_top_left()
     state = load_tournament(tid)
     if not state:
         st.error("No se encontró el torneo."); return
-
-    logo_url = state.get("config", {}).get("logo_url") or ""
-    render_brand_top_left(logo_url if logo_url.strip() else None)
-
     st.subheader(f"{state['meta'].get('t_name')} — {state['meta'].get('place')} — {state['meta'].get('date')} — {state['meta'].get('gender')}")
     tab_over, tab_tables, tab_ko = st.tabs(["👀 General","📊 Tablas","🏁 Playoffs"])
     with tab_over:
@@ -924,20 +990,23 @@ def init_app():
     _tid = params.get("tid", [""])
     _tid = _tid[0] if isinstance(_tid, list) else _tid
 
+    # Logo global fijo
+    render_brand_top_left()
+
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
+        st.caption("iAPPs Pádel — v3.3.8")
         return
 
     # Login o paneles
     if not st.session_state.get("auth_user"):
-        render_brand_top_left()  # logo en login
         login_form()
+        st.caption("iAPPs Pádel — v3.3.8")
         return
 
     user = st.session_state["auth_user"]
-    # barra superior
-    render_brand_top_left((state_logo_url() if callable(state_logo_url) else None) or None)
 
+    # barra superior (sin caption de versión aquí)
     top = st.columns([4,3,3,1])
     with top[0]: st.markdown(f"**Usuario:** {user['username']} · Rol: `{user['role']}`")
     with top[1]: st.link_button("Abrir Super Admin", url="?mode=super")
@@ -955,25 +1024,7 @@ def init_app():
     else:
         st.error("Rol desconocido.")
 
-# Utilidad opcional para recuperar logo (no rompe si no hay torneo cargado)
-def state_logo_url() -> Optional[str]:
-    tid = st.session_state.get("current_tid")
-    if not tid: return None
-    stt = load_tournament(tid)
-    if not stt: return None
-    return (stt.get("config", {}) or {}).get("logo_url")
+    # Footer de versión (muy pequeño y abajo)
+    st.caption("iAPPs Pádel — v3.3.8")
 
-# ====== Viewer (consulta) flujo principal ======
-def viewer_dashboard(user: Dict[str, Any]):
-    # Para VIEWER se lista en base al admin asignado
-    st.header(f"Vista de consulta — {user['username']}")
-    if not user.get("assigned_admin"): st.warning("No asignado a un admin."); return
-    my = load_index_for_admin(user["assigned_admin"])
-    if not my: st.info("El admin asignado no tiene torneos."); return
-    names = [f"{t['date']} — {t['t_name']} ({t['gender']}) — {t['place']} — ID:{t['tournament_id']}" for t in my]
-    selected = st.selectbox("Selecciona un torneo para ver", names, index=0)
-    sel = my[names.index(selected)]
-    viewer_tournament(sel["tournament_id"])
-
-st.caption("v3.3.7 — Logo por URL o SVG; alta manual/CSV; sin JSON crudo; sin puntos por empate; PDFs opcionales.")
 init_app()
