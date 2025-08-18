@@ -441,8 +441,9 @@ def brand_text_logo() -> str:
     """Genera el logo de texto con ancho uniforme."""
     return f"""
     <div style="font-family: 'Inter', 'Segoe UI', 'Roboto', 'Arial', sans-serif; font-weight: 800; line-height: 1.1; margin-bottom: 0px; padding: 0.5rem 0;">
-        <div style="font-size: 1.5rem; color: {PRIMARY_BLUE}; letter-spacing: 0.1rem; white-space: nowrap;">iAPPS TOURNAMENT</div>
-        <div style="font-size: 1.5rem; color: {LIME_GREEN}; letter-spacing: 0.15rem;">PADEL</div>
+        <div style="font-size: 1.6rem; color: {DARK_BLUE}; letter-spacing: 0.5rem; white-space: nowrap;">iAPPS</div>
+        <div style="font-size: 1.6rem; color: {LIME_GREEN}; letter-spacing: 0.5rem; white-space: nowrap;">PADEL</div>
+        <div style="font-size: 1.3rem; color: {DARK_BLUE}; letter-spacing: 0.1rem; white-space: nowrap;">TOURNAMENTS</div>
     </div>
     """
 
