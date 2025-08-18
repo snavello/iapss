@@ -438,9 +438,8 @@ def brand_text_logo() -> str:
     """Genera el logo de texto con ancho uniforme."""
     return f"""
     <div style="font-family: 'Inter', 'Segoe UI', 'Roboto', 'Arial', sans-serif; font-weight: 800; line-height: 1.1; margin-bottom: 0px;">
-        <div style="font-size: 1.7rem; color: {PRIMARY_BLUE}; letter-spacing: 0.8rem;">iAPPS</div>
-        <div style="font-size: 1.7rem; color: {PRIMARY_BLUE}; letter-spacing: 0.03rem;">TOURNAMENT</div>
-        <div style="font-size: 1.7rem; color: {LIME_GREEN}; letter-spacing: 1.2rem;">PADEL</div>
+        <div style="font-size: 1.7rem; color: {PRIMARY_BLUE}; letter-spacing: 0.15rem; white-space: nowrap;">iAPPS TOURNAMENT</div>
+        <div style="font-size: 1.7rem; color: {LIME_GREEN}; letter-spacing: 0.2rem;">PADEL</div>
     </div>
     """
 
@@ -1257,21 +1256,12 @@ def tournament_manager(user: Dict[str, Any], tid: str):
         elif not st.session_state.autosave:
             st.session_state.last_hash = current_hash
 
-def viewer_tournament(tid: str, public: bool=True):
-    st.info("Viewer mode is not fully implemented in this script version.")
-    st.info(f"Tournament ID: {tid}")
-    state = load_tournament(tid)
-    if not state:
-        st.error("No se encontró el torneo.")
-        return
-    st.write(state)
-
 def main():
     init_session()
 
-    params = dict(parse_qsl(st.experimental_get_query_params().get("mode", [""])[0]))
-    mode = params.get("mode", [""])[0] if isinstance(params.get("mode"), list) else params.get("mode")
-    _tid = params.get("tid", [""])[0] if isinstance(params.get("tid"), list) else params.get("tid")
+    params = st.query_params
+    mode = params.get("mode", "")
+    _tid = params.get("tid", "")
 
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
