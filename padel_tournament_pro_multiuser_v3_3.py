@@ -1,5 +1,5 @@
-# app.py — v3.3.18
-# - Fix logo visibility issue: adjusted CSS to prevent logo from being cut off.
+# app.py — v3.3.19
+# - Fix logo visibility issue: removed fixed topbar and red line.
 # - Replaced st.experimental_get_query_params with st.query_params.
 # - Playoffs according to N qualifiers (2→FN; 4→SF+FN; 8→QF+SF+FN)
 # - "Regenerate Playoffs" button
@@ -32,7 +32,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — v3.3.18", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — v3.3.19", layout="wide")
 
 # ====== Estilos / colores ======
 PRIMARY_BLUE = "#0D47A1"
@@ -339,7 +339,7 @@ def build_initial_ko(qualified: List[Tuple[str,int,str]]) -> List[Dict[str,Any]]
         # 2 → FINAL directa entre los dos
         if N == 2:
             a = qualified[0][2]; b = qualified[1][2]
-            return [{"round":"FN","label":"FINAL","a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0}]
+            return [{"round":"FN","label":"FINAL","a":a,"b":b,"sets":[],"golden1":0,"golden2":0}]
         # 4 → Semifinales por ganadores/segundos cruzados
         if N == 4:
             pairs = seed_pairs(winners, runners)
@@ -450,18 +450,15 @@ def inject_global_layout(user_info_text: str):
 
     st.markdown(f"""
     <style>
-      .topbar {{
-        position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
-        background: white;
+      .top-header-container {{
+        display: flex; align-items: center; justify-content: space-between; gap: 12px;
         padding: 0.5rem 1rem;
-        display: flex; align-items: center; gap: 12px;
-        border-top: 4px solid red; /* La "raya roja" */
+        border-bottom: 1px solid #e5e5e5;
       }}
-      .topbar .left {{ display:flex; align-items:center; gap:10px; overflow:visible; }}
-      .topbar .right {{ margin-left:auto; display:flex; align-items:center; gap:12px; font-size:.92rem; color:#333; }}
-      .content-offset {{ padding-top: 80px; }}
+      .top-header-left {{ display:flex; align-items:center; gap:10px; overflow:visible; }}
+      .top-header-right {{ display:flex; align-items:center; gap:12px; font-size:.92rem; color:#333; }}
       .stTabs [data-baseweb="tab-list"] {{
-        position: sticky; top: 70px; z-index: 9998; background: white; border-bottom:1px solid #e5e5e5;
+        position: sticky; top: 0px; z-index: 9998; background: white; border-bottom:1px solid #e5e5e5;
       }}
       .dark-header th {{ background-color: #2f3b52 !important; color:#fff !important; }}
       .zebra tr:nth-child(even) td {{ background-color: #f5f7fa !important; }}
@@ -475,12 +472,12 @@ def inject_global_layout(user_info_text: str):
         font-size:1.1rem; font-weight:700; color:#795548; margin:8px 0;
       }}
     </style>
-    <div class="topbar">
-      <div class="left">{logo_html}</div>
-      <div class="right">{user_info_text}</div>
+    <div class="top-header-container">
+      <div class="top-header-left">{logo_html}</div>
+      <div class="top-header-right">{user_info_text}</div>
     </div>
     """, unsafe_allow_html=True)
-    st.markdown('<div class="content-offset"></div>', unsafe_allow_html=True)
+
 
 # ====== Sesión ======
 def init_session():
@@ -687,8 +684,8 @@ def delete_tournament(admin_username: str, tid: str):
     for f in (snap_dir_for(tid)).glob("*.json"):
         try:
             f.unlink()
-        except Exception:
-            pass
+    except Exception:
+        pass
 
 def admin_dashboard(user: Dict[str, Any]):
     user_text = f"Usuario: <b>{user['username']}</b> &nbsp;|&nbsp; Rol: <code>{user['role']}</code> &nbsp;&nbsp;<a href='#' onclick='window.location.reload()'>Cerrar sesión</a>"
@@ -1268,13 +1265,13 @@ def main():
 
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
-        st.caption("iAPPs Pádel — v3.3.18")
+        st.caption("iAPPs Pádel — v3.3.19")
         return
 
     if not st.session_state.get("auth_user"):
         inject_global_layout("No autenticado")
         login_form()
-        st.caption("iAPPs Pádel — v3.3.18")
+        st.caption("iAPPs Pádel — v3.3.19")
         return
 
     user = st.session_state["auth_user"]
