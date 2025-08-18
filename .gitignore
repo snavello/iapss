@@ -1,0 +1,23 @@
+# Archivos Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Configuración local
+.env
+.venv/
+venv/
+ENV/
+env/
+
+# Archivos de Streamlit
+.streamlit/
+
+# Archivos generados
+*.json
+*.pdf
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
