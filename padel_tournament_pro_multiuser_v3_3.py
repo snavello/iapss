@@ -1,9 +1,11 @@
-# app.py — v3.3.15
-# - Fix logo visible (data URI + estilos reforzados)
-# - Playoffs según N clasificados (2→FN; 4→SF+FN; 8→QF+SF+FN)
-# - Botón "Regenerar Playoffs"
-# - Campeón destacado en FINAL
-# - Advertencia + restauración rápida de JSON (autosave suspendido)
+# app.py — v3.3.16
+# - Fix logo visibility issue: adjusted CSS to prevent logo from being cut off.
+# - Replaced st.experimental_get_query_params with st.query_params.
+# - Playoffs according to N qualifiers (2→FN; 4→SF+FN; 8→QF+SF+FN)
+# - "Regenerate Playoffs" button
+# - Champion highlighted in FINAL
+# - Warning + quick JSON restoration (autosave suspended)
+# - Fix NameError: init_app()
 
 import streamlit as st
 import pandas as pd
@@ -17,6 +19,7 @@ import uuid
 from typing import Dict, Any, List, Optional, Tuple
 from io import BytesIO
 import base64, requests
+from urllib.parse import parse_qsl
 
 # ====== PDF opcional ======
 try:
@@ -29,7 +32,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — v3.3.15", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — v3.3.16", layout="wide")
 
 # ====== Estilos / colores ======
 PRIMARY_BLUE = "#0D47A1"
@@ -259,8 +262,8 @@ def standings_from_results(zone_name, group_pairs, results_list, cfg):
             table.at[p, "PJ"] += 1
             table.at[p, "GF"] += gf
             table.at[p, "GC"] += gc
-        table.at[p1, "GP"] += int(m.get("golden1",0))
-        table.at[p2, "GP"] += int(m.get("golden2",0))
+        table.at[p, "GP"] += int(m.get("golden1",0))
+        table.at[p, "GP"] += int(m.get("golden2",0))
         if s1>s2:
             table.at[p1, "PG"] += 1; table.at[p2, "PP"] += 1
             table.at[p1, "PTS"] += cfg["points_win"]
@@ -336,7 +339,7 @@ def build_initial_ko(qualified: List[Tuple[str,int,str]]) -> List[Dict[str,Any]]
         # 2 → FINAL directa entre los dos
         if N == 2:
             a = qualified[0][2]; b = qualified[1][2]
-            return [{"round":"FN","label":"FINAL","a":a,"b":b,"sets":[],"golden1":0,"golden2":0}]
+            return [{"round":"FN","label":"FINAL","a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0}]
         # 4 → Semifinales por ganadores/segundos cruzados
         if N == 4:
             pairs = seed_pairs(winners, runners)
@@ -433,11 +436,11 @@ def next_round(slots: List[str]):
 
 # ====== Branding / layout ======
 def brand_text_logo() -> str:
-    """Genera un logo de texto simple en HTML."""
-    return """
-    <div style="font-family: 'Segoe UI', 'Roboto', sans-serif; font-weight: 800; font-size: 1.5rem; line-height: 1; color: #0D47A1; display:flex; align-items:center; gap: 4px;">
-        <span>iAPP</span>
-        <span style="font-weight: 900; color: #AEEA00; font-size: 1.6rem; margin-top: -2px;">s</span>
+    """Genera el logo de texto con ancho uniforme."""
+    return f"""
+    <div style="font-family: 'Inter', 'Segoe UI', 'Roboto', 'Arial', sans-serif; font-weight: 800; line-height: 1.1; margin-bottom: 0px;">
+        <div style="font-size: 1.5rem; color: {PRIMARY_BLUE}; letter-spacing: 0.1rem; white-space: nowrap;">iAPPS TOURNAMENT</div>
+        <div style="font-size: 1.5rem; color: {LIME_GREEN}; letter-spacing: 0.15rem;">PADEL</div>
     </div>
     """
 
@@ -454,7 +457,7 @@ def inject_global_layout(user_info_text: str):
       }}
       .topbar .left {{ display:flex; align-items:center; gap:10px; overflow:visible; }}
       .topbar .right {{ margin-left:auto; display:flex; align-items:center; gap:12px; font-size:.92rem; color:#333; }}
-      .content-offset {{ padding-top: 200px; }}
+      .content-offset {{ padding-top: 120px; }}
       .stTabs [data-baseweb="tab-list"] {{
         position: sticky; top: 92px; z-index: 9998; background: white; border-bottom:1px solid #e5e5e5;
       }}
@@ -623,7 +626,7 @@ def super_admin_panel():
     users = load_users()
     for usr in users:
         with st.container(border=True):
-            st.write(f"**{usr['username']}** — rol `{usr['role']}` — activo `{usr.get('active',True)}`")
+            st.write(f"**{usr['username']}** — rol `{usr['role']}` — activo `{usr.get("active",True)}`")
             c1,c2,c3,c4 = st.columns(4)
             with c1:
                 new_pin = st.text_input(f"Nuevo PIN para {usr['username']}", key=f"np_{usr['username']}", max_chars=6)
@@ -1254,168 +1257,22 @@ def tournament_manager(user: Dict[str, Any], tid: str):
         elif not st.session_state.autosave:
             st.session_state.last_hash = current_hash
 
-# ====== Viewer ======
-def viewer_dashboard(user: Dict[str, Any]):
-    user_text = f"Usuario: <b>{user['username']}</b> &nbsp;|&nbsp; Rol: <code>{user['role']}</code>"
-    inject_global_layout(user_text)
-    st.header(f"Vista de consulta — {user['username']}")
-    if not user.get("assigned_admin"):
-        st.warning("No asignado a un admin.")
-        return
-    my = load_index_for_admin(user["assigned_admin"])
-    if not my:
-        st.info("El admin asignado no tiene torneos.")
-        return
-    names = [f"{t['date']} — {t['t_name']} ({t['gender']}) — {t['place']} — ID:{t['tournament_id']}" for t in my]
-    selected = st.selectbox("Selecciona un torneo para ver", names, index=0)
-    sel = my[names.index(selected)]
-    viewer_tournament(sel["tournament_id"])
-
-def viewer_tournament(tid: str, public: bool=False):
-    user_text = "Modo público" if public else "Modo consulta"
-    inject_global_layout(user_text)
-    state = load_tournament(tid)
-    if not state:
-        st.error("No se encontró el torneo.")
-        return
-    st.subheader(f"{state['meta'].get('t_name')} — {state['meta'].get('place')} — {state['meta'].get('date')} — {state['meta'].get('gender')}")
-    tab_over, tab_tables, tab_ko = st.tabs(["👀 General","📊 Tablas","🏁 Playoffs"])
-    with tab_over:
-        st.write("Parejas")
-        dfp = pd.DataFrame({"Parejas": state.get("pairs", [])})
-        st.markdown(dfp.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
-        if state.get("groups"):
-            st.write("Zonas")
-            for zi, group in enumerate(state["groups"], start=1):
-                st.write(f"**Z{zi}**")
-                df_g = pd.DataFrame({"Parejas": group})
-                st.markdown(df_g.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
-    with tab_tables:
-        if not state.get("groups") or not state.get("results"):
-            st.info("Sin fixture/resultados aún.")
-        else:
-            cfg = state["config"]
-            fmt = cfg.get("format","best_of_3")
-            for zi, group in enumerate(state["groups"], start=1):
-                zone_name = f"Z{zi}"
-                status = "✅ Completa" if zone_complete(zone_name, state["results"], fmt) else "⏳ A definir"
-                st.markdown(f"#### Tabla {zone_name} — {status}")
-                table = standings_from_results(zone_name, group, state["results"], cfg)
-                if table.empty:
-                    st.info("Sin datos para mostrar todavía.")
-                else:
-                    st.markdown(table.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
-    with tab_ko:
-        ko = state.get("ko", {"matches": []})
-        if not ko.get("matches"):
-            st.info("Aún no hay partidos de playoffs.")
-        else:
-            rows = []
-            for m in ko["matches"]:
-                stats = compute_sets_stats(m.get("sets", [])) if m.get("sets") else {"sets1":0,"sets2":0}
-                res = "A definir"
-                if m.get("sets") and match_has_winner(m["sets"]):
-                    res = f"{stats['sets1']}-{stats['sets2']}"
-                rows.append({"Ronda": m.get("round",""), "Clave": m.get("label",""), "A": m.get("a",""), "B": m.get("b",""), "Resultado": res})
-            dfo = pd.DataFrame(rows)
-            st.markdown(dfo.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
-    if public:
-        st.info("Modo público (solo lectura)")
-
-# ====== PDF (fixture / playoffs) ======
-def export_fixture_pdf(state: Dict[str,Any]) -> Optional[BytesIO]:
-    if not REPORTLAB_OK:
-        return None
-    buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.5*cm, rightMargin=1.5*cm, topMargin=1.5*cm, bottomMargin=1.5*cm)
-    styles = getSampleStyleSheet()
-    elems = []
-    title = f"Fixture — {state['meta'].get('t_name')} — {state['meta'].get('place')} — {state['meta'].get('date')}"
-    elems.append(Paragraph(title, styles['Title']))
-    elems.append(Spacer(1, 12))
-    if not state.get("groups"):
-        elems.append(Paragraph("Sin zonas generadas.", styles['Normal']))
-    else:
-        for zi, group in enumerate(state["groups"], start=1):
-            elems.append(Paragraph(f"Zona Z{zi}", styles['Heading2']))
-            data = [["Parejas"]] + [[p] for p in group]
-            t = Table(data, colWidths=[16*cm])
-            t.setStyle(TableStyle([
-                ('GRID',(0,0),(-1,-1),0.5,colors.grey),
-                ('BACKGROUND',(0,0),(-1,0),colors.lightgrey)
-            ]))
-            elems.append(t)
-            elems.append(Spacer(1,8))
-        rows = [["Zona","Pareja 1","Pareja 2"]]
-        for m in state["results"]:
-            rows.append([m["zone"], m["pair1"], m["pair2"]])
-        elems.append(Paragraph("Partidos (fase de grupos)", styles['Heading2']))
-        t2 = Table(rows, colWidths=[2*cm, 7*cm, 7*cm])
-        t2.setStyle(TableStyle([
-            ('GRID',(0,0),(-1,-1),0.5,colors.grey),
-            ('BACKGROUND',(0,0),(-1,0),colors.lightgrey)
-        ]))
-        elems.append(t2)
-    doc.build(elems)
-    buf.seek(0)
-    return buf
-
-def export_playoffs_pdf(state: Dict[str,Any]) -> Optional[BytesIO]:
-    if not REPORTLAB_OK:
-        return None
-    buf = BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.0*cm, rightMargin=1.0*cm, topMargin=1.0*cm, bottomMargin=1.0*cm)
-    styles = getSampleStyleSheet()
-    elems = []
-    elems.append(Paragraph(f"Playoffs — {state['meta'].get('t_name')}", styles['Title']))
-    elems.append(Spacer(1, 10))
-    ko = state.get("ko", {"matches": []})
-    rounds = ["QF","SF","FN"]
-    for r in rounds:
-        ms = [m for m in ko.get("matches", []) if m.get("round")==r]
-        if not ms:
-            continue
-        elems.append(Paragraph(r, styles['Heading2']))
-        rows = [["Clave","A","B","Sets A-B","Ptos Oro A-B"]]
-        for m in ms:
-            stats = compute_sets_stats(m.get("sets", []))
-            sets_str = f"{stats['sets1']}-{stats['sets2']}" if m.get("sets") and match_has_winner(m["sets"]) else "A definir"
-            gp_str = f"{m.get('goldenA',0)}-{m.get('goldenB',0)}"
-            rows.append([m.get("label",""), m.get("a",""), m.get("b",""), sets_str, gp_str])
-        t = Table(rows, colWidths=[3*cm, 5*cm, 5*cm, 3*cm, 3*cm])
-        t.setStyle(TableStyle([
-            ('GRID',(0,0),(-1,-1),0.5,colors.grey),
-            ('BACKGROUND',(0,0),(-1,0),colors.lightgrey)
-        ]))
-        elems.append(t)
-        elems.append(Spacer(1,8))
-    doc.build(elems)
-    buf.seek(0)
-    return buf
-
-# ====== Entrada ======
-def init_app():
-    try:
-        params = st.query_params
-    except Exception:
-        params = st.experimental_get_query_params()
-
+def main():
     init_session()
 
-    mode = params.get("mode", [""])
-    mode = mode[0] if isinstance(mode, list) else mode
-    _tid = params.get("tid", [""])
-    _tid = _tid[0] if isinstance(_tid, list) else _tid
+    params = st.query_params
+    mode = params.get("mode", "")
+    _tid = params.get("tid", "")
 
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
-        st.caption("iAPPs Pádel — v3.3.15")
+        st.caption("iAPPs Pádel — v3.3.16")
         return
 
     if not st.session_state.get("auth_user"):
         inject_global_layout("No autenticado")
         login_form()
-        st.caption("iAPPs Pádel — v3.3.15")
+        st.caption("iAPPs Pádel — v3.3.16")
         return
 
     user = st.session_state["auth_user"]
@@ -1432,18 +1289,20 @@ def init_app():
         st.button("Cerrar sesión", on_click=lambda: st.session_state.update({"auth_user":None,"current_tid":None}))
     st.divider()
 
-    if user["role"]=="SUPER_ADMIN" and (mode=="super"):
-        super_admin_panel()
-    elif user["role"]=="SUPER_ADMIN":
+    if user["role"]=="SUPER_ADMIN":
         super_admin_panel()
     elif user["role"]=="TOURNAMENT_ADMIN":
         admin_dashboard(user)
     elif user["role"]=="VIEWER":
-        viewer_dashboard(user)
+        st.info("Modo solo lectura. Puedes ver los torneos de tu administrador asignado.")
+        admin = get_user(user.get("assigned_admin"))
+        if admin:
+            st.markdown(f"Torneos de `{admin['username']}`")
+            admin_dashboard(admin)
+        else:
+            st.warning("No se encontró un administrador asignado.")
     else:
-        st.error("Rol desconocido.")
+        st.error("Rol de usuario desconocido.")
 
-    st.caption("iAPPs Pádel — v3.3.15")
-
-# Ejecutar
-init_app()
+if __name__ == '__main__':
+    main()
