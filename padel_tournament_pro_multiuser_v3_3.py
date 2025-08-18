@@ -1,9 +1,10 @@
-# app.py — v3.3.15
-# - Fix logo visible (data URI + estilos reforzados)
-# - Playoffs según N clasificados (2→FN; 4→SF+FN; 8→QF+SF+FN)
-# - Botón "Regenerar Playoffs"
-# - Campeón destacado en FINAL
-# - Advertencia + restauración rápida de JSON (autosave suspendido)
+# app.py — v3.3.16
+# - Fix logo visibility issue: adjusted CSS to prevent logo from being cut off.
+# - Replaced st.experimental_get_query_params with st.query_params.
+# - Playoffs according to N qualifiers (2→FN; 4→SF+FN; 8→QF+SF+FN)
+# - "Regenerate Playoffs" button
+# - Champion highlighted in FINAL
+# - Warning + quick JSON restoration (autosave suspended)
 # - Fix NameError: init_app()
 
 import streamlit as st
@@ -31,7 +32,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — v3.3.15", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — v3.3.16", layout="wide")
 
 # ====== Estilos / colores ======
 PRIMARY_BLUE = "#0D47A1"
@@ -438,8 +439,8 @@ def brand_text_logo() -> str:
     """Genera el logo de texto con ancho uniforme."""
     return f"""
     <div style="font-family: 'Inter', 'Segoe UI', 'Roboto', 'Arial', sans-serif; font-weight: 800; line-height: 1.1; margin-bottom: 0px;">
-        <div style="font-size: 1.7rem; color: {PRIMARY_BLUE}; letter-spacing: 0.15rem; white-space: nowrap;">iAPPS TOURNAMENT</div>
-        <div style="font-size: 1.7rem; color: {LIME_GREEN}; letter-spacing: 0.2rem;">PADEL</div>
+        <div style="font-size: 1.5rem; color: {PRIMARY_BLUE}; letter-spacing: 0.1rem; white-space: nowrap;">iAPPS TOURNAMENT</div>
+        <div style="font-size: 1.5rem; color: {LIME_GREEN}; letter-spacing: 0.15rem;">PADEL</div>
     </div>
     """
 
@@ -452,11 +453,11 @@ def inject_global_layout(user_info_text: str):
       .topbar {{
         position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
         background: white; border-bottom: 1px solid #e5e5e5;
-        padding: 12px; display: flex; align-items: center; gap: 12px;
+        padding: 1rem; display: flex; align-items: center; gap: 12px;
       }}
       .topbar .left {{ display:flex; align-items:center; gap:10px; overflow:visible; }}
       .topbar .right {{ margin-left:auto; display:flex; align-items:center; gap:12px; font-size:.92rem; color:#333; }}
-      .content-offset {{ padding-top: 92px; }}
+      .content-offset {{ padding-top: 120px; }}
       .stTabs [data-baseweb="tab-list"] {{
         position: sticky; top: 92px; z-index: 9998; background: white; border-bottom:1px solid #e5e5e5;
       }}
@@ -1265,13 +1266,13 @@ def main():
 
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
-        st.caption("iAPPs Pádel — v3.3.15")
+        st.caption("iAPPs Pádel — v3.3.16")
         return
 
     if not st.session_state.get("auth_user"):
         inject_global_layout("No autenticado")
         login_form()
-        st.caption("iAPPs Pádel — v3.3.15")
+        st.caption("iAPPs Pádel — v3.3.16")
         return
 
     user = st.session_state["auth_user"]
