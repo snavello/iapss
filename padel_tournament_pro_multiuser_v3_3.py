@@ -694,8 +694,6 @@ def delete_tournament(admin_username: str, tid: str):
                 f.unlink()
             except Exception:
                 pass
-    except Exception:
-        pass
 
 def admin_dashboard(user: Dict[str, Any]):
     user_text = f"Usuario: <b>{user['username']}</b> &nbsp;|&nbsp; Rol: <code>{user['role']}</code> &nbsp;&nbsp;<a href='#' onclick='window.location.reload()'>Cerrar sesión</a>"
@@ -762,12 +760,13 @@ def tournament_manager(user: Dict[str,Any], tid: str):
             st.rerun()
         return
 
-    st.header(state["meta"]["t_name"])
-    st.markdown(f"""
-        <div style="font-size: 1.1em; color: #555; margin-bottom: 20px;">
-            **Lugar:** {state['meta']['place']} | **Fecha:** {state['meta']['date']} | **ID:** `{state['meta']['tournament_id']}`
-        </div>
-    """, unsafe_allow_html=True)
+    # Removed the redundant header and tournament details section
+    # st.header(state["meta"]["t_name"])
+    # st.markdown(f"""
+    #     <div style="font-size: 1.1em; color: #555; margin-bottom: 20px;">
+    #         **Lugar:** {state['meta']['place']} | **Fecha:** {state['meta']['date']} | **ID:** `{state['meta']['tournament_id']}`
+    #     </div>
+    # """, unsafe_allow_html=True)
 
     # Autoguardado periódico
     if st.session_state.autosave and st.session_state.get("suspend_autosave_runs", 0) <= 0:
