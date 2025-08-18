@@ -4,6 +4,7 @@
 # - Botón "Regenerar Playoffs"
 # - Campeón destacado en FINAL
 # - Advertencia + restauración rápida de JSON (autosave suspendido)
+# - Fix NameError: init_app()
 
 import streamlit as st
 import pandas as pd
@@ -17,6 +18,7 @@ import uuid
 from typing import Dict, Any, List, Optional, Tuple
 from io import BytesIO
 import base64, requests
+from urllib.parse import parse_qsl
 
 # ====== PDF opcional ======
 try:
@@ -1255,5 +1257,61 @@ def tournament_manager(user: Dict[str, Any], tid: str):
         elif not st.session_state.autosave:
             st.session_state.last_hash = current_hash
 
-# Ejecutar
-init_app()
+def viewer_tournament(tid: str, public: bool=True):
+    st.info("Viewer mode is not fully implemented in this script version.")
+    st.info(f"Tournament ID: {tid}")
+    state = load_tournament(tid)
+    if not state:
+        st.error("No se encontró el torneo.")
+        return
+    st.write(state)
+
+def main():
+    init_session()
+
+    params = dict(parse_qsl(st.experimental_get_query_params().get("mode", [""])[0]))
+    mode = params.get("mode", [""])[0] if isinstance(params.get("mode"), list) else params.get("mode")
+    _tid = params.get("tid", [""])[0] if isinstance(params.get("tid"), list) else params.get("tid")
+
+    if mode=="public" and _tid:
+        viewer_tournament(_tid, public=True)
+        st.caption("iAPPs Pádel — v3.3.15")
+        return
+
+    if not st.session_state.get("auth_user"):
+        inject_global_layout("No autenticado")
+        login_form()
+        st.caption("iAPPs Pádel — v3.3.15")
+        return
+
+    user = st.session_state["auth_user"]
+
+    user_text = f"Usuario: <b>{user['username']}</b> &nbsp;|&nbsp; Rol: <code>{user['role']}</code> &nbsp;&nbsp;<a href='#' onclick='window.location.reload()'>Cerrar sesión</a>"
+    inject_global_layout(user_text)
+
+    top = st.columns([4,3,3,1])
+    with top[0]:
+        st.markdown(f"**Usuario:** {user['username']} · Rol: `{user['role']}`")
+    with top[1]:
+        st.link_button("Abrir Super Admin", url="?mode=super")
+    with top[2]:
+        st.button("Cerrar sesión", on_click=lambda: st.session_state.update({"auth_user":None,"current_tid":None}))
+    st.divider()
+
+    if user["role"]=="SUPER_ADMIN":
+        super_admin_panel()
+    elif user["role"]=="TOURNAMENT_ADMIN":
+        admin_dashboard(user)
+    elif user["role"]=="VIEWER":
+        st.info("Modo solo lectura. Puedes ver los torneos de tu administrador asignado.")
+        admin = get_user(user.get("assigned_admin"))
+        if admin:
+            st.markdown(f"Torneos de `{admin['username']}`")
+            admin_dashboard(admin)
+        else:
+            st.warning("No se encontró un administrador asignado.")
+    else:
+        st.error("Rol de usuario desconocido.")
+
+if __name__ == '__main__':
+    main()
