@@ -19,7 +19,6 @@ import uuid
 from typing import Dict, Any, List, Optional, Tuple
 from io import BytesIO
 import base64, requests
-from urllib.parse import parse_qsl
 
 # ====== PDF opcional ======
 try:
@@ -109,7 +108,10 @@ def load_users() -> List[Dict[str, Any]]:
     if not USERS_PATH.exists():
         USERS_PATH.write_text(json.dumps([DEFAULT_SUPER], indent=2), encoding="utf-8")
         return [DEFAULT_SUPER]
-    return json.loads(USERS_PATH.read_text(encoding="utf-8"))
+    try:
+        return json.loads(USERS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return [DEFAULT_SUPER]
 
 def save_users(users: List[Dict[str, Any]]):
     USERS_PATH.write_text(json.dumps(users, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -681,9 +683,12 @@ def delete_tournament(admin_username: str, tid: str):
     p = tourn_path(tid)
     if p.exists():
         p.unlink()
-    for f in (snap_dir_for(tid)).glob("*.json"):
-        try:
-            f.unlink()
+    try:
+        for f in (snap_dir_for(tid)).glob("*.json"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -1255,6 +1260,9 @@ def tournament_manager(user: Dict[str, Any], tid: str):
             st.session_state.last_hash = current_hash
         elif not st.session_state.autosave:
             st.session_state.last_hash = current_hash
+
+def viewer_tournament(tid: str, public: bool=False):
+    pass # No implementation was provided, so it is left as-is
 
 def main():
     init_session()
