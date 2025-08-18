@@ -1,4 +1,4 @@
-# app.py — v3.3.20
+# app.py — v3.3.21
 # - Fix logo visibility issue: removed fixed topbar and red line.
 # - Replaced st.experimental_get_query_params with st.query_params.
 # - Playoffs according to N qualifiers (2→FN; 4→SF+FN; 8→QF+SF+FN)
@@ -6,6 +6,7 @@
 # - Champion highlighted in FINAL
 # - Warning + quick JSON restoration (autosave suspended)
 # - Fix NameError: init_app()
+# - Reworked delete_tournament for better file cleanup robustness.
 
 import streamlit as st
 import pandas as pd
@@ -31,7 +32,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — v3.3.20", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — v3.3.21", layout="wide")
 
 # ====== Estilos / colores ======
 PRIMARY_BLUE = "#0D47A1"
@@ -685,16 +686,16 @@ def delete_tournament(admin_username: str, tid: str):
     idx = load_index()
     idx = [t for t in idx if not (t["tournament_id"]==tid and t["admin_username"]==admin_username)]
     save_index(idx)
-    p = tourn_path(tid)
-    if p.exists():
-        p.unlink()
     try:
+        p = tourn_path(tid)
+        if p.exists():
+            p.unlink()
         for f in (snap_dir_for(tid)).glob("*.json"):
-            try:
-                f.unlink()
-            except Exception:
-                pass
+            f.unlink()
+        (snap_dir_for(tid)).rmdir()
     except Exception:
+        # Si algo falla en la eliminación de archivos, no detiene el programa.
+        # El índice ya se actualizó.
         pass
 
 def admin_dashboard(user: Dict[str, Any]):
@@ -1261,13 +1262,13 @@ def main():
 
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
-        st.caption("iAPPs Pádel — v3.3.20")
+        st.caption("iAPPs Pádel — v3.3.21")
         return
 
     if not st.session_state.get("auth_user"):
         inject_global_layout("No autenticado")
         login_form()
-        st.caption("iAPPs Pádel — v3.3.20")
+        st.caption("iAPPs Pádel — v3.3.21")
         return
 
     user = st.session_state["auth_user"]
