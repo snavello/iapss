@@ -798,6 +798,8 @@ def tournament_manager(user: Dict[str,Any], tid: str):
             with c1: points_win = st.number_input("Puntos por victoria", min_value=0, value=state["config"]["points_win"])
             with c2: points_loss = st.number_input("Puntos por derrota", min_value=0, value=state["config"]["points_loss"])
             with c3: seed = st.number_input("Seed de Sorteo", value=state["config"]["seed"])
+            with c4: # Placeholder to keep alignment
+                 st.markdown(" ")
             submitted = st.form_submit_button("Guardar configuración", type="primary")
             if submitted:
                 state["config"]["t_name"] = new_t_name
