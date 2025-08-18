@@ -445,7 +445,7 @@ def brand_text_logo() -> str:
     <div style="font-family: 'Inter', 'Segoe UI', 'Roboto', 'Arial', sans-serif; font-weight: 800; line-height: 1.1; margin-bottom: 0px; padding: 0.5rem 0;">
         <div style="font-size: 1.6rem; color: {DARK_BLUE}; letter-spacing: 0.5rem; white-space: nowrap;">iAPPS</div>
         <div style="font-size: 1.6rem; color: {LIME_GREEN}; letter-spacing: 0.5rem; white-space: nowrap;">PADEL</div>
-        <div style="font-size: 0.7rem; color: {DARK_BLUE}; letter-spacing: 0.08rem; white-space: nowrap;">TOURNAMENTS</div>
+        <div style="font-size: 0.7rem; color: {DARK_BLUE}; letter-spacing: 0.09rem; white-space: nowrap;">TOURNAMENTS</div>
     </div>
     """
 
