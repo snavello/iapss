@@ -259,8 +259,8 @@ def standings_from_results(zone_name, group_pairs, results_list, cfg):
             table.at[p, "PJ"] += 1
             table.at[p, "GF"] += gf
             table.at[p, "GC"] += gc
-        table.at[p1, "GP"] += int(m.get("golden1",0))
-        table.at[p2, "GP"] += int(m.get("golden2",0))
+        table.at[p, "GP"] += int(m.get("golden1",0))
+        table.at[p, "GP"] += int(m.get("golden2",0))
         if s1>s2:
             table.at[p1, "PG"] += 1; table.at[p2, "PP"] += 1
             table.at[p1, "PTS"] += cfg["points_win"]
@@ -435,10 +435,10 @@ def next_round(slots: List[str]):
 def brand_text_logo() -> str:
     """Genera el logo de texto con ancho uniforme."""
     return f"""
-    <div style="font-family: 'Inter', 'Segoe UI', 'Roboto', 'Arial', sans-serif; font-weight: 800; line-height: 1.1; margin-bottom: 4px;">
+    <div style="font-family: 'Inter', 'Segoe UI', 'Roboto', 'Arial', sans-serif; font-weight: 800; line-height: 1.1; margin-bottom: 0px;">
         <div style="font-size: 1.7rem; color: {PRIMARY_BLUE}; letter-spacing: 0.8rem;">iAPPS</div>
         <div style="font-size: 1.7rem; color: {PRIMARY_BLUE}; letter-spacing: 0.03rem;">TOURNAMENT</div>
-        <div style="font-size: 1.7rem; color: {LIME_GREEN}; letter-spacing: 1.2rem;">PÁDEL</div>
+        <div style="font-size: 1.7rem; color: {LIME_GREEN}; letter-spacing: 1.2rem;">PADEL</div>
     </div>
     """
 
@@ -451,7 +451,7 @@ def inject_global_layout(user_info_text: str):
       .topbar {{
         position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
         background: white; border-bottom: 1px solid #e5e5e5;
-        padding: 6px 12px; display: flex; align-items: center; gap: 12px;
+        padding: 12px; display: flex; align-items: center; gap: 12px;
       }}
       .topbar .left {{ display:flex; align-items:center; gap:10px; overflow:visible; }}
       .topbar .right {{ margin-left:auto; display:flex; align-items:center; gap:12px; font-size:.92rem; color:#333; }}
@@ -1254,58 +1254,6 @@ def tournament_manager(user: Dict[str, Any], tid: str):
             st.session_state.last_hash = current_hash
         elif not st.session_state.autosave:
             st.session_state.last_hash = current_hash
-
-# ====== Entrada ======
-def init_app():
-    try:
-        params = st.query_params
-    except Exception:
-        params = st.experimental_get_query_params()
-
-    init_session()
-
-    mode = params.get("mode", [""])
-    mode = mode[0] if isinstance(mode, list) else mode
-    _tid = params.get("tid", [""])
-    _tid = _tid[0] if isinstance(_tid, list) else _tid
-
-    if mode=="public" and _tid:
-        viewer_tournament(_tid, public=True)
-        st.caption("iAPPs Pádel — v3.3.15")
-        return
-
-    if not st.session_state.get("auth_user"):
-        inject_global_layout("No autenticado")
-        login_form()
-        st.caption("iAPPs Pádel — v3.3.15")
-        return
-
-    user = st.session_state["auth_user"]
-
-    user_text = f"Usuario: <b>{user['username']}</b> &nbsp;|&nbsp; Rol: <code>{user['role']}</code> &nbsp;&nbsp;<a href='#' onclick='window.location.reload()'>Cerrar sesión</a>"
-    inject_global_layout(user_text)
-
-    top = st.columns([4,3,3,1])
-    with top[0]:
-        st.markdown(f"**Usuario:** {user['username']} · Rol: `{user['role']}`")
-    with top[1]:
-        st.link_button("Abrir Super Admin", url="?mode=super")
-    with top[2]:
-        st.button("Cerrar sesión", on_click=lambda: st.session_state.update({"auth_user":None,"current_tid":None}))
-    st.divider()
-
-    if user["role"]=="SUPER_ADMIN" and (mode=="super"):
-        super_admin_panel()
-    elif user["role"]=="SUPER_ADMIN":
-        super_admin_panel()
-    elif user["role"]=="TOURNAMENT_ADMIN":
-        admin_dashboard(user)
-    elif user["role"]=="VIEWER":
-        viewer_dashboard(user)
-    else:
-        st.error("Rol desconocido.")
-
-    st.caption("iAPPs Pádel — v3.3.15")
 
 # Ejecutar
 init_app()
