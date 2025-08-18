@@ -694,6 +694,8 @@ def delete_tournament(admin_username: str, tid: str):
                 f.unlink()
             except Exception:
                 pass
+    except Exception:
+        pass
 
 def admin_dashboard(user: Dict[str, Any]):
     user_text = f"Usuario: <b>{user['username']}</b> &nbsp;|&nbsp; Rol: <code>{user['role']}</code> &nbsp;&nbsp;<a href='#' onclick='window.location.reload()'>Cerrar sesión</a>"
