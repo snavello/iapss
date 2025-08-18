@@ -456,7 +456,6 @@ def inject_global_layout(user_info_text: str):
         padding: 0.5rem 1rem;
         display: flex; align-items: center; gap: 12px;
         border-top: 4px solid red; /* La "raya roja" */
-        border-bottom: 1px solid #e5e5e5; /* La "línea horizontal gris" */
       }}
       .topbar .left {{ display:flex; align-items:center; gap:10px; overflow:visible; }}
       .topbar .right {{ margin-left:auto; display:flex; align-items:center; gap:12px; font-size:.92rem; color:#333; }}
