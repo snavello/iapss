@@ -1,4 +1,4 @@
-# app.py — v3.3.16
+# app.py — v3.3.17
 # - Fix logo visibility issue: adjusted CSS to prevent logo from being cut off.
 # - Replaced st.experimental_get_query_params with st.query_params.
 # - Playoffs according to N qualifiers (2→FN; 4→SF+FN; 8→QF+SF+FN)
@@ -32,7 +32,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — v3.3.16", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — v3.3.17", layout="wide")
 
 # ====== Estilos / colores ======
 PRIMARY_BLUE = "#0D47A1"
@@ -453,13 +453,13 @@ def inject_global_layout(user_info_text: str):
       .topbar {{
         position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
         background: white; border-bottom: 1px solid #e5e5e5;
-        padding: 1rem; display: flex; align-items: center; gap: 12px;
+        padding: 0.75rem 1rem; display: flex; align-items: center; gap: 12px;
       }}
       .topbar .left {{ display:flex; align-items:center; gap:10px; overflow:visible; }}
       .topbar .right {{ margin-left:auto; display:flex; align-items:center; gap:12px; font-size:.92rem; color:#333; }}
-      .content-offset {{ padding-top: 120px; }}
+      .content-offset {{ padding-top: 90px; }}
       .stTabs [data-baseweb="tab-list"] {{
-        position: sticky; top: 92px; z-index: 9998; background: white; border-bottom:1px solid #e5e5e5;
+        position: sticky; top: 72px; z-index: 9998; background: white; border-bottom:1px solid #e5e5e5;
       }}
       .dark-header th {{ background-color: #2f3b52 !important; color:#fff !important; }}
       .zebra tr:nth-child(even) td {{ background-color: #f5f7fa !important; }}
@@ -1266,13 +1266,13 @@ def main():
 
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
-        st.caption("iAPPs Pádel — v3.3.16")
+        st.caption("iAPPs Pádel — v3.3.17")
         return
 
     if not st.session_state.get("auth_user"):
         inject_global_layout("No autenticado")
         login_form()
-        st.caption("iAPPs Pádel — v3.3.16")
+        st.caption("iAPPs Pádel — v3.3.17")
         return
 
     user = st.session_state["auth_user"]
