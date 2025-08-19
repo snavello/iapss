@@ -1071,10 +1071,10 @@ def main():
     
     # Manejar query params para acceso público y super admin
     params = st.query_params
-    mode = params.get("mode", [\"\"])[0]
-    _tid = params.get("tid", [\"\"])[0]
+    mode = params.get("mode", [""])[0]
+    _tid = params.get("tid", [""])[0]
 
-    if mode==\"public\" and _tid:
+    if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
         st.caption("iAPPs Pádel — v3.3.23")
         return
