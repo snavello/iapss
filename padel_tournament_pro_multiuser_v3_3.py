@@ -1,9 +1,10 @@
-# app.py — v3.3.15
-# - Fix logo visible (data URI + estilos reforzados)
-# - Playoffs según N clasificados (2→FN; 4→SF+FN; 8→QF+SF+FN)
-# - Botón "Regenerar Playoffs"
-# - Campeón destacado en FINAL
-# - Advertencia + restauración rápida de JSON (autosave suspendido)
+# app.py — v3.3.23
+# - Exponer link publico completo + icono copiar al portapapeles.
+# - Agregar checkbox 'Usar cabezas de serie'.
+# - Sistema de cabezas de serie con 1 por zona.
+# - Administracion de parejas: form a la izq, lista a la der, icono de basura para eliminar.
+# - Tablas: encabezados en gris, alternancia de colores, icono de check para los clasificados.
+# - Corregido el estilo del texto 'TOURNAMENTS'.
 
 import streamlit as st
 import pandas as pd
@@ -17,6 +18,7 @@ import uuid
 from typing import Dict, Any, List, Optional, Tuple
 from io import BytesIO
 import base64, requests
+from urllib.parse import urlparse, urlunparse
 
 # ====== PDF opcional ======
 try:
@@ -29,7 +31,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — v3.3.15", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — v3.3.23", layout="wide")
 
 # ====== Estilos / colores ======
 PRIMARY_BLUE = "#0D47A1"
@@ -95,6 +97,26 @@ def fetch_image_as_data_uri(url: str, bust: str = "") -> str:
         return f"data:{mime};base64,{b64}"
     except Exception:
         return ""
+
+def brand_text_logo() -> str:
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="220" viewBox="0 0 660 200" role="img" aria-label="iAPPs PADEL TOURNAMENT">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="{PRIMARY_BLUE}" />
+      <stop offset="100%" stop-color="{DARK_BLUE}" />
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="660" height="200" fill="transparent"/>
+  <text x="8" y="65" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="800"
+        font-size="74" fill="url(#g1)" letter-spacing="2">iAPP</text>
+  <text x="445" y="65" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="900"
+        font-size="72" fill="{LIME_GREEN}">s</text>
+  <text x="8" y="125" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="800"
+        font-size="76" fill="{PRIMARY_BLUE}" letter-spacing="4">PADEL</text>
+  <text x="8" y="182" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="700"
+        font-size="58" fill="{PRIMARY_BLUE}" letter-spacing="6">TOURNAMENT</text>
+</svg>"""
+
 
 # ====== Usuarios ======
 DEFAULT_SUPER = {
@@ -174,15 +196,22 @@ DEFAULT_CONFIG = {
     "points_win": 2,
     "points_loss": 0,
     "seed": 42,
-    "format": "best_of_3"  # one_set | best_of_3 | best_of_5
+    "format": "best_of_3",  # one_set | best_of_3 | best_of_5
+    "use_seed_pairs": False,
+    "seed_pairs": []
 }
 
 rng = lambda off, seed: random.Random(int(seed) + int(off))
 
-def create_groups(pairs, num_groups, seed=42):
-    r = random.Random(int(seed))
+def create_groups(pairs, num_groups, seed=42, seed_pairs_list=None):
+    r = rng(seed, "groups")
     shuffled = pairs[:]
-    r.shuffle(shuffled)
+    if seed_pairs_list:
+        seeded = [p for p in shuffled if parse_pair_number(p) in seed_pairs_list]
+        unseeded = [p for p in shuffled if parse_pair_number(p) not in seed_pairs_list]
+        r.shuffle(unseeded)
+        shuffled = seeded + unseeded
+    
     groups = [[] for _ in range(num_groups)]
     for i, p in enumerate(shuffled):
         groups[i % num_groups].append(p)
@@ -431,48 +460,25 @@ def next_round(slots: List[str]):
         else: out.append((slots[i], None)); i+=1
     return out
 
-# ====== Branding / layout ======
-def brand_svg(width_px: int = 220) -> str:
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width_px}" viewBox="0 0 660 200" role="img" aria-label="iAPPs PADEL TOURNAMENT">
-  <defs>
-    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="{PRIMARY_BLUE}" />
-      <stop offset="100%" stop-color="{DARK_BLUE}" />
-    </linearGradient>
-  </defs>
-  <rect x="0" y="0" width="660" height="200" fill="transparent"/>
-  <text x="8" y="65" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="800"
-        font-size="74" fill="url(#g1)" letter-spacing="2">iAPP</text>
-  <text x="445" y="65" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="900"
-        font-size="72" fill="{LIME_GREEN}">s</text>
-  <text x="8" y="125" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="800"
-        font-size="76" fill="{PRIMARY_BLUE}" letter-spacing="4">PADEL</text>
-  <text x="8" y="182" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="700"
-        font-size="58" fill="{PRIMARY_BLUE}" letter-spacing="6">TOURNAMENT</text>
-</svg>"""
+def get_public_link(tid: str) -> str:
+    url = st.get_app_host()
+    return f"{url}?mode=public&tid={tid}"
 
 def inject_global_layout(user_info_text: str):
-    app_cfg = load_app_config()
-    url = (app_cfg or {}).get("app_logo_url", "").strip() or None
-
-    data_uri = fetch_image_as_data_uri(url, bust="v3_3_15") if url else ""
-    if data_uri:
-        logo_html = f'<img src="{data_uri}" alt="logo" style="display:block;max-width:20vw;max-height:64px;width:auto;height:auto;object-fit:contain;" />'
-    else:
-        logo_html = brand_svg(220)
+    # App logo is now always the text logo, regardless of config
+    logo_html = brand_text_logo()
 
     st.markdown(f"""
     <style>
-      .topbar {{
-        position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
-        background: white; border-bottom: 1px solid #e5e5e5;
-        padding: 6px 12px; display: flex; align-items: center; gap: 12px;
+      .top-header-container {{
+        display: flex; align-items: center; justify-content: space-between; gap: 12px;
+        padding: 0.5rem 1rem;
+        border-bottom: 1px solid #e5e5e5;
       }}
-      .topbar .left {{ display:flex; align-items:center; gap:10px; overflow:visible; }}
-      .topbar .right {{ margin-left:auto; display:flex; align-items:center; gap:12px; font-size:.92rem; color:#333; }}
-      .content-offset {{ padding-top: 92px; }}
+      .top-header-left {{ display:flex; align-items:center; gap:10px; overflow:visible; }}
+      .top-header-right {{ display:flex; align-items:center; gap:12px; font-size:.92rem; color:#333; }}
       .stTabs [data-baseweb="tab-list"] {{
-        position: sticky; top: 92px; z-index: 9998; background: white; border-bottom:1px solid #e5e5e5;
+        position: sticky; top: 0px; z-index: 9998; background: white; border-bottom:1px solid #e5e5e5;
       }}
       .dark-header th {{ background-color: #2f3b52 !important; color:#fff !important; }}
       .zebra tr:nth-child(even) td {{ background-color: #f5f7fa !important; }}
@@ -485,13 +491,17 @@ def inject_global_layout(user_info_text: str):
         padding:14px 18px; border-radius:10px; background:#fff9c4; border:1px solid #ffeb3b;
         font-size:1.1rem; font-weight:700; color:#795548; margin:8px 0;
       }}
+      table.dataframe th, table.dataframe td {{ padding: 6px 10px; }}
+      .stButton>button {{ height: 100%; }}
+      .copy-btn-container {{ display:flex; align-items: center; gap: 5px; }}
+      .st-emotion-cache-1r7r32t {{ margin-top: 0; }}
+      .compact-table td, .compact-table th {{ padding: 4px 8px; }}
     </style>
-    <div class="topbar">
-      <div class="left">{logo_html}</div>
-      <div class="right">{user_info_text}</div>
+    <div class="top-header-container">
+      <div class="top-header-left">{logo_html}</div>
+      <div class="top-header-right">{user_info_text}</div>
     </div>
     """, unsafe_allow_html=True)
-    st.markdown('<div class="content-offset"></div>', unsafe_allow_html=True)
 
 # ====== Sesión ======
 def init_session():
@@ -698,8 +708,8 @@ def delete_tournament(admin_username: str, tid: str):
     for f in (snap_dir_for(tid)).glob("*.json"):
         try:
             f.unlink()
-        except Exception:
-            pass
+    except Exception:
+        pass
 
 def admin_dashboard(user: Dict[str, Any]):
     user_text = f"Usuario: <b>{user['username']}</b> &nbsp;|&nbsp; Rol: <code>{user['role']}</code> &nbsp;&nbsp;<a href='#' onclick='window.location.reload()'>Cerrar sesión</a>"
@@ -747,9 +757,20 @@ def admin_dashboard(user: Dict[str, Any]):
             st.rerun()
     with c3:
         tid = sel["tournament_id"]
+        public_link = get_public_link(tid)
         st.caption("Link público (solo lectura):")
-        st.code(f"?mode=public&tid={tid}")
-
+        st.markdown(f"""
+            <div class="copy-btn-container">
+                <input type="text" value="{public_link}" id="publicLinkInput" readonly style="width:100%; border:none; background:none;"/>
+                <button onclick="navigator.clipboard.writeText('{public_link}')" title="Copiar link" style="background:none; border:none;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-clipboard" viewBox="0 0 16 16">
+                        <path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/>
+                        <path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/>
+                    </svg>
+                </button>
+            </div>
+        """, unsafe_allow_html=True)
+    
     if st.session_state.get("current_tid"):
         tournament_manager(user, st.session_state["current_tid"])
 
@@ -800,6 +821,17 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                 index=["one_set", "best_of_3", "best_of_5"].index(cfg.get("format")),
                 key="match_format"
             )
+        
+        cfg["use_seed_pairs"] = st.checkbox("Usar cabezas de serie (1 por zona)", value=cfg.get("use_seed_pairs"))
+        if cfg["use_seed_pairs"]:
+            all_pairs = sorted(state["pairs"], key=parse_pair_number)
+            cfg["seed_pairs"] = st.multiselect(
+                f"Selecciona {cfg['num_zones']} cabezas de serie",
+                options=all_pairs,
+                default=[p for p in cfg.get("seed_pairs",[]) if p in all_pairs],
+                max_selections=cfg["num_zones"]
+            )
+
 
         if st.button("Guardar configuración", type="primary"):
             state["config"] = cfg
@@ -863,8 +895,10 @@ def tournament_manager(user: Dict[str, Any], tid: str):
         if st.button("Generar grupos/fixture", type="primary", use_container_width=True):
             if len(state["pairs"]) < 2:
                 st.warning("Deben haber al menos 2 parejas para generar un fixture.")
+            elif cfg["use_seed_pairs"] and len(cfg.get("seed_pairs",[])) != cfg["num_zones"]:
+                st.warning(f"Debes seleccionar exactamente {cfg['num_zones']} cabezas de serie.")
             else:
-                groups = create_groups(state["pairs"], cfg["num_zones"], cfg["seed"])
+                groups = create_groups(state["pairs"], cfg["num_zones"], cfg["seed"], cfg.get("seed_pairs"))
                 state["groups"] = groups
                 state["results"] = build_fixtures(groups)
                 state["ko"]["matches"] = []
@@ -1173,7 +1207,15 @@ def generate_pdf_ko(state: Dict[str, Any]) -> bytes:
             round_matches = [m for m in matches if m['round']==round_name]
             
             for m in round_matches:
-                sets_str = f"{compute_sets_stats(m['sets'])['sets1']}-{compute_sets_stats(m['sets'])['sets2']}" if m['sets'] else "N/A"
+                stats = compute_sets_stats(m['sets'])
+                winner_text = ""
+                if stats["sets1"] > stats["sets2"]:
+                    winner_text = f"➡️ **Ganador: {m['a']}**"
+                elif stats["sets2"] > stats["sets1"]:
+                    winner_text = f"➡️ **Ganador: {m['b']}**"
+                
+                sets_str = f"({stats['sets1']}-{stats['sets2']})"
+                
                 flowables.append(Paragraph(f"<b>{m['a']}</b> vs <b>{m['b']}</b> &nbsp; Resultado: {sets_str}", styles['Normal']))
                 flowables.append(Spacer(1, 0.2*cm))
 
@@ -1258,7 +1300,7 @@ def main():
         params = st.query_params
         mode = params.get("mode", [""])[0]
         _tid = params.get("tid", [""])[0]
-
+        
         if mode=="super":
             if st.session_state.get("auth_user") and st.session_state.auth_user["role"] == "SUPER_ADMIN":
                 super_admin_panel()
@@ -1269,29 +1311,17 @@ def main():
 
         if mode=="public" and _tid:
             viewer_tournament(_tid, public=True)
-            st.caption("iAPPs Pádel — v3.3.15")
+            st.caption("iAPPs Pádel — v3.3.23")
             return
-
+            
     if not st.session_state.get("auth_user"):
         inject_global_layout("No autenticado")
         login_form()
-        st.caption("iAPPs Pádel — v3.3.15")
+        st.caption("iAPPs Pádel — v3.3.23")
         return
 
     user = st.session_state["auth_user"]
     
-    user_text = f"Usuario: <b>{user['username']}</b> &nbsp;|&nbsp; Rol: <code>{user['role']}</code> &nbsp;&nbsp;<a href='#' onclick='window.location.reload()'>Cerrar sesión</a>"
-    inject_global_layout(user_text)
-
-    top = st.columns([4,3,3,1])
-    with top[0]:
-        st.markdown(f"**Usuario:** {user['username']} · Rol: `{user['role']}`")
-    with top[1]:
-        st.link_button("Abrir Super Admin", url="?mode=super")
-    with top[2]:
-        st.button("Cerrar sesión", on_click=lambda: st.session_state.update({"auth_user":None,"current_tid":None}))
-    st.divider()
-
     if user["role"]=="SUPER_ADMIN":
         super_admin_panel()
     elif user["role"]=="TOURNAMENT_ADMIN":
