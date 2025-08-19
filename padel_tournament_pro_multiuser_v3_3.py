@@ -1,10 +1,12 @@
-# padel_tournament_pro_multiuser_v3_3.py — v3.3.28
+# padel_tournament_pro_multiuser_v3_3.py — v3.3.29
 # Corrección mínima:
-# - Evitar KeyError cuando falta la clave "seeded_pairs":
-#   * Al cargar estado de torneo: tourn_state.setdefault("seeded_pairs", [])
-#   * Todas las lecturas de seeded_pairs usan tourn_state.get("seeded_pairs", [])
+# - Arregladas dos f-strings en la pestaña "Resultados" (faltaba cerrar `}"`):
+#     key=f"s1_{tourn_tid}_{idx}_{si}"
+#     key=f"s2_{tourn_tid}_{idx}_{si}"
+# - Se mantiene la corrección previa para evitar KeyError con "seeded_pairs"
+#   (setdefault) y lecturas usando .get(..., []) cuando aplica.
 #
-# Resto del comportamiento/UI sin cambios.
+# No se cambia ninguna otra parte de la lógica ni del flujo de la app.
 
 import streamlit as st
 import pandas as pd
@@ -30,7 +32,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — v3.3.28", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — v3.3.29", layout="wide")
 
 # ====== Rutas/Persistencia ======
 DATA_DIR = Path("data")
@@ -121,7 +123,7 @@ def inject_global_layout(user_info_text: str):
     app_cfg = load_app_config()
     url = (app_cfg or {}).get("app_logo_url", "").strip() or None
 
-    data_uri = fetch_image_as_data_uri(url, bust="v3_3_28") if url else ""
+    data_uri = fetch_image_as_data_uri(url, bust="v3_3_29") if url else ""
     if data_uri:
         logo_html = f'<img src="{data_uri}" alt="logo" style="display:block;max-width:20vw;max-height:64px;width:auto;height:auto;object-fit:contain;" />'
     else:
@@ -501,8 +503,7 @@ def tournament_state_template(admin_username: str, meta: Dict[str, Any]) -> Dict
         "groups": None,
         "results": [],
         "ko": {"matches": []},
-        # Nota: en torneos nuevos podemos incluir seeded_pairs vacío para compatibilidad:
-        # "seeded_pairs": []
+        # "seeded_pairs": []  # opcional
     }
 
 # ====== Utilidades parejas ======
@@ -638,9 +639,8 @@ def admin_dashboard(admin_user: Dict[str, Any]):
     if st.session_state.current_tid:
         tourn_tid = st.session_state.current_tid
         tourn_state = load_tournament(tourn_tid)
-        # ------------ FIX principal: asegurar clave seeded_pairs ------------
+        # Asegurar clave compatibilidad:
         tourn_state.setdefault("seeded_pairs", [])
-        # -------------------------------------------------------------------
         st.session_state.last_hash = compute_state_hash(tourn_state)
 
         t_name = tourn_state["meta"]["t_name"]
@@ -887,13 +887,13 @@ def admin_dashboard(admin_user: Dict[str, Any]):
                                 s1 = st.number_input(
                                     f"Set {si+1} — games {m['pair1']}", 0, 20,
                                     int(cur_sets[si]["s1"]) if si<len(cur_sets) and "s1" in cur_sets[si] else 0,
-                                    key=f"s1_{tourn_tid}_{idx}_{si"
+                                    key=f"s1_{tourn_tid}_{idx}_{si}"
                                 )
                             with cB:
                                 s2 = st.number_input(
                                     f"Set {si+1} — games {m['pair2']}", 0, 20,
                                     int(cur_sets[si]["s2"]) if si<len(cur_sets) and "s2" in cur_sets[si] else 0,
-                                    key=f"s2_{tourn_tid}_{idx}_{si"
+                                    key=f"s2_{tourn_tid}_{idx}_{si}"
                                 )
                             new_sets.append({"s1":int(s1),"s2":int(s2)})
                         ok, msg = validate_sets(fmt, new_sets)
@@ -1282,13 +1282,13 @@ def main():
 
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
-        st.caption("iAPPs Pádel — v3.3.28")
+        st.caption("iAPPs Pádel — v3.3.29")
         return
 
     if not st.session_state.get("auth_user"):
         inject_global_layout("No autenticado")
         login_form()
-        st.caption("iAPPs Pádel — v3.3.28")
+        st.caption("iAPPs Pádel — v3.3.29")
         return
 
     user = st.session_state["auth_user"]
@@ -1316,7 +1316,7 @@ def main():
     else:
         st.error("Rol desconocido.")
 
-    st.caption("iAPPs Pádel — v3.3.28")
+    st.caption("iAPPs Pádel — v3.3.29")
 
 # Ejecutar
 if __name__ == "__main__":
