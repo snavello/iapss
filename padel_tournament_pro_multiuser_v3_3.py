@@ -1,5 +1,6 @@
-# app.py — v3.3.25
-# - Fix `AttributeError` from public link generation in admin dashboard.
+# app.py — v3.3.26
+# - Fix `StreamlitInvalidFormCallbackError` by moving the "copy link" button outside the form.
+# - This also resolves the "Missing Submit Button" warning related to the same form.
 # - Restore "Persistencia" tab with all its content and functionality.
 # - Reworked public URL logic to be more robust.
 
@@ -28,7 +29,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — v3.3.25", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — v3.3.26", layout="wide")
 
 # ====== Estilos / colores ======
 PRIMARY_BLUE = "#0D47A1"
@@ -778,22 +779,23 @@ def admin_dashboard(admin_user: Dict[str, Any]):
             st.markdown("### Configuración")
             current_config = tourn_state["config"]
             
+            # --- Enlaces públicos y botón de copiar (FUERA DEL FORM) ---
+            c_name, c_url = st.columns([0.7, 0.3])
+            with c_url:
+                base_url = "https://padel-tournament-pro-multiuser.streamlit.app"
+                public_url = f"{base_url}/?mode=public&tid={tourn_tid}"
+                st.text_input("Link público", value=public_url, key="public_link", disabled=True)
+                st.button("📋 Icono de copiar", on_click=lambda: st.components.v1.html(f"""
+                    <script>
+                        navigator.clipboard.writeText("{public_url}").then(() => {{
+                            alert("Link copiado!");
+                        }});
+                    </script>
+                """, height=0, width=0))
+            
             with st.form("tourn_config_form"):
-                c_name, c_url = st.columns([0.7, 0.3])
                 with c_name:
                     tourn_state["meta"]["t_name"] = st.text_input("Nombre del torneo", value=tourn_state["meta"]["t_name"], key="c_name")
-                with c_url:
-                    # Fix for AttributeError
-                    base_url = "https://padel-tournament-pro-multiuser.streamlit.app"
-                    public_url = f"{base_url}/?mode=public&tid={tourn_tid}"
-                    st.text_input("Link público", value=public_url, key="public_link", disabled=True)
-                    st.button("📋 Icono de copiar", on_click=lambda: st.components.v1.html(f"""
-                        <script>
-                            navigator.clipboard.writeText("{public_url}").then(() => {{
-                                alert("Link copiado!");
-                            }});
-                        </script>
-                    """, height=0, width=0))
                 
                 c1,c2,c3,c4 = st.columns(4)
                 with c1:
@@ -1165,13 +1167,13 @@ def main():
 
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
-        st.caption("iAPPs Pádel — v3.3.25")
+        st.caption("iAPPs Pádel — v3.3.26")
         return
 
     if not st.session_state.get("auth_user"):
         inject_global_layout("No autenticado")
         login_form()
-        st.caption("iAPPs Pádel — v3.3.25")
+        st.caption("iAPPs Pádel — v3.3.26")
         return
 
     user = st.session_state["auth_user"]
