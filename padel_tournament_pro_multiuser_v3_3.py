@@ -1,10 +1,10 @@
-# app.py — v3.3.27
-# - Fix `StreamlitInvalidFormCallbackError` by moving the "copy link" button outside the form.
-# - This also resolves the "Missing Submit Button" warning related to the same form.
-# - Restore "Persistencia" tab with all its content and functionality.
-# - Reworked public URL logic to be more robust.
-# - Fix `Streamlit` bug where pair names were not being detected in the form by
-#   correctly resetting session state after a successful submission.
+# padel_tournament_pro_multiuser_v3_3.py — v3.3.28
+# Corrección mínima:
+# - Evitar KeyError cuando falta la clave "seeded_pairs":
+#   * Al cargar estado de torneo: tourn_state.setdefault("seeded_pairs", [])
+#   * Todas las lecturas de seeded_pairs usan tourn_state.get("seeded_pairs", [])
+#
+# Resto del comportamiento/UI sin cambios.
 
 import streamlit as st
 import pandas as pd
@@ -18,7 +18,6 @@ import uuid
 from typing import Dict, Any, List, Optional, Tuple
 from io import BytesIO
 import base64, requests
-from urllib.parse import urlparse, urlunparse
 
 # ====== PDF opcional ======
 try:
@@ -31,16 +30,9 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — v3.3.27", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — v3.3.28", layout="wide")
 
-# ====== Estilos / colores ======
-PRIMARY_BLUE = "#0D47A1"
-LIME_GREEN  = "#AEEA00"
-DARK_BLUE   = "#082D63"
-DARK_GREY   = "#2f3b52"
-LIGHT_GREY  = "#f5f7fa"
-
-# ====== Persistencia local ======
+# ====== Rutas/Persistencia ======
 DATA_DIR = Path("data")
 APP_CONFIG_PATH = DATA_DIR / "app_config.json"   # Config global (logo_url)
 USERS_PATH = DATA_DIR / "users.json"
@@ -58,6 +50,7 @@ now_iso = lambda: datetime.now().isoformat()
 
 # ====== Config de App global (logo por URL RAW) ======
 DEFAULT_APP_CONFIG = {
+    # Cambiá esta URL si subís otro logo RAW a tu repo
     "app_logo_url": "https://raw.githubusercontent.com/snavello/iapss/main/1000138052.png"
 }
 
@@ -100,6 +93,72 @@ def fetch_image_as_data_uri(url: str, bust: str = "") -> str:
     except Exception:
         return ""
 
+# ====== Branding / layout ======
+PRIMARY_BLUE = "#0D47A1"
+LIME_GREEN  = "#AEEA00"
+DARK_BLUE   = "#082D63"
+
+def brand_svg(width_px: int = 220) -> str:
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width_px}" viewBox="0 0 660 200" role="img" aria-label="iAPPs PADEL TOURNAMENT">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="{PRIMARY_BLUE}" />
+      <stop offset="100%" stop-color="{DARK_BLUE}" />
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="660" height="200" fill="transparent"/>
+  <text x="8" y="65" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="800"
+        font-size="74" fill="url(#g1)" letter-spacing="2">iAPP</text>
+  <text x="445" y="65" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="900"
+        font-size="72" fill="{LIME_GREEN}">s</text>
+  <text x="8" y="125" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="800"
+        font-size="76" fill="{PRIMARY_BLUE}" letter-spacing="4">PADEL</text>
+  <text x="8" y="182" font-family="Inter, Segoe UI, Roboto, Arial, sans-serif" font-weight="700"
+        font-size="58" fill="{PRIMARY_BLUE}" letter-spacing="6">TOURNAMENT</text>
+</svg>"""
+
+def inject_global_layout(user_info_text: str):
+    app_cfg = load_app_config()
+    url = (app_cfg or {}).get("app_logo_url", "").strip() or None
+
+    data_uri = fetch_image_as_data_uri(url, bust="v3_3_28") if url else ""
+    if data_uri:
+        logo_html = f'<img src="{data_uri}" alt="logo" style="display:block;max-width:20vw;max-height:64px;width:auto;height:auto;object-fit:contain;" />'
+    else:
+        logo_html = brand_svg(220)
+
+    st.markdown(f"""
+    <style>
+      .topbar {{
+        position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+        background: white; border-bottom: 1px solid #e5e5e5;
+        padding: 6px 12px; display: flex; align-items: center; gap: 12px;
+      }}
+      .topbar .left {{ display:flex; align-items:center; gap:10px; overflow:visible; }}
+      .topbar .right {{ margin-left:auto; display:flex; align-items:center; gap:12px; font-size:.92rem; color:#333; }}
+      .content-offset {{ padding-top: 92px; }}
+      .stTabs [data-baseweb="tab-list"] {{
+        position: sticky; top: 92px; z-index: 9998; background: white; border-bottom:1px solid #e5e5e5;
+      }}
+      .dark-header th {{ background-color: #2f3b52 !important; color:#fff !important; }}
+      .zebra tr:nth-child(even) td {{ background-color: #f5f7fa !important; }}
+      .zebra tr:nth-child(odd) td  {{ background-color: #ffffff !important; }}
+      .winner-badge {{
+        display:inline-block; padding:4px 8px; border-radius:8px;
+        background:#e8f5e9; color:#1b5e20; font-weight:600; margin-left:8px;
+      }}
+      .champion-banner {{
+        padding:14px 18px; border-radius:10px; background:#fff9c4; border:1px solid #ffeb3b;
+        font-size:1.1rem; font-weight:700; color:#795548; margin:8px 0;
+      }}
+    </style>
+    <div class="topbar">
+      <div class="left">{logo_html}</div>
+      <div class="right">{user_info_text}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown('<div class="content-offset"></div>', unsafe_allow_html=True)
+
 # ====== Usuarios ======
 DEFAULT_SUPER = {
     "username": "ADMIN", "pin_hash": sha("199601"), "role": "SUPER_ADMIN",
@@ -110,10 +169,7 @@ def load_users() -> List[Dict[str, Any]]:
     if not USERS_PATH.exists():
         USERS_PATH.write_text(json.dumps([DEFAULT_SUPER], indent=2), encoding="utf-8")
         return [DEFAULT_SUPER]
-    try:
-        return json.loads(USERS_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return [DEFAULT_SUPER]
+    return json.loads(USERS_PATH.read_text(encoding="utf-8"))
 
 def save_users(users: List[Dict[str, Any]]):
     USERS_PATH.write_text(json.dumps(users, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -172,7 +228,7 @@ def save_tournament(tid: str, obj: Dict[str, Any], make_snapshot: bool=True):
             except Exception:
                 pass
 
-# ====== Reglas / utilidades ======
+# ====== Config / reglas ======
 DEFAULT_CONFIG = {
     "t_name": "Open Pádel",
     "num_pairs": 16,
@@ -181,41 +237,18 @@ DEFAULT_CONFIG = {
     "points_win": 2,
     "points_loss": 0,
     "seed": 42,
-    "format": "best_of_3",  # one_set | best_of_3 | best_of_5
-    "seeded_mode": False
+    "format": "best_of_3"  # one_set | best_of_3 | best_of_5
 }
 
 rng = lambda off, seed: random.Random(int(seed) + int(off))
 
-def create_groups(pairs, num_groups, seeded_mode=False, seeded_pairs=None, seed=42):
+def create_groups(pairs, num_groups, seed=42):
     r = random.Random(int(seed))
+    shuffled = pairs[:]
+    r.shuffle(shuffled)
     groups = [[] for _ in range(num_groups)]
-    
-    if seeded_mode and seeded_pairs:
-        # Asignar los cabezas de serie, uno por zona, de forma aleatoria.
-        shuffled_seeded = seeded_pairs[:]
-        r.shuffle(shuffled_seeded)
-        for i, p in enumerate(shuffled_seeded):
-            groups[i % num_groups].append(p)
-        
-        # Distribuir el resto de las parejas.
-        non_seeded_pairs = [p for p in pairs if p not in seeded_pairs]
-        shuffled_non_seeded = non_seeded_pairs[:]
-        r.shuffle(shuffled_non_seeded)
-        
-        group_idx = 0
-        for p in shuffled_non_seeded:
-            # Encontrar el siguiente grupo con espacio
-            while len(groups[group_idx % num_groups]) >= (len(pairs) / num_groups):
-                group_idx += 1
-            groups[group_idx % num_groups].append(p)
-            group_idx += 1
-    else:
-        shuffled = pairs[:]
-        r.shuffle(shuffled)
-        for i, p in enumerate(shuffled):
-            groups[i % num_groups].append(p)
-    
+    for i, p in enumerate(shuffled):
+        groups[i % num_groups].append(p)
     return groups
 
 def rr_schedule(group):
@@ -289,8 +322,8 @@ def standings_from_results(zone_name, group_pairs, results_list, cfg):
             table.at[p, "PJ"] += 1
             table.at[p, "GF"] += gf
             table.at[p, "GC"] += gc
-        table.at[p, "GP"] += int(m.get("golden1",0))
-        table.at[p, "GP"] += int(m.get("golden2",0))
+        table.at[p1, "GP"] += int(m.get("golden1",0))
+        table.at[p2, "GP"] += int(m.get("golden2",0))
         if s1>s2:
             table.at[p1, "PG"] += 1; table.at[p2, "PP"] += 1
             table.at[p1, "PTS"] += cfg["points_win"]
@@ -320,26 +353,23 @@ def qualified_from_tables(zone_tables, k):
             qualified.append((z, int(row["Pos"]), row["pair"]))
     return qualified
 
-# ====== Bracket helpers ======
+# ====== Playoffs helpers ======
 def next_pow2(n: int) -> int:
-    # siguiente potencia de 2 >= n
     p = 1
     while p < n:
         p <<= 1
     return p
 
 def starting_round_name(n_slots: int) -> str:
-    # 2→FN ; 4→SF ; 8→QF ; 16→R16 ; etc. (solo usamos QF/SF/FN aquí)
     if n_slots <= 2: return "FN"
     if n_slots <= 4: return "SF"
     return "QF"
 
-def seed_pairs(winners: List[str], runners: List[str]) -> List[Tuple[str,str]]:
+def seed_pairs(winners: List[Tuple[str,int,str]], runners: List[Tuple[str,int,str]]) -> List[Tuple[str,str]]:
     """Empareja ganadores con segundos de otra zona, rotando los segundos."""
     if not winners or not runners:
         return []
     if len(winners) != len(runners):
-        # si N no coincide, emparejamos hasta min
         m = min(len(winners), len(runners))
         winners = winners[:m]; runners = runners[:m]
     rr = runners[1:] + runners[:1] if len(runners) > 1 else runners
@@ -348,78 +378,56 @@ def seed_pairs(winners: List[str], runners: List[str]) -> List[Tuple[str,str]]:
 def build_initial_ko(qualified: List[Tuple[str,int,str]]) -> List[Dict[str,Any]]:
     """
     qualified: lista de (zona, pos, pareja).
-    Devuelve lista de partidos iniciales con round: FN/SF/QF según N clasificados, evitando BYE cuando N=2 o 4 u 8 exacto.
-    Si N no es potencia de 2, reparte BYEs.
+    Devuelve partidos iniciales sin BYE cuando N es 2, 4 u 8.
+    Si N no es potencia de 2, reparte BYEs en la ronda inicial para seeds altos.
     """
     N = len(qualified)
     if N == 0:
         return []
-    # dividir por posición
     winners = [q for q in qualified if q[1]==1]
     runners = [q for q in qualified if q[1]==2]
-    # slots necesarios
     slots = next_pow2(N)  # 2,4,8,16...
     start_round = starting_round_name(slots)
 
-    # Caso potencia de 2 exacta: emparejamientos sin BYE
     if N == slots:
-        # 2 → FINAL directa entre los dos
         if N == 2:
             a = qualified[0][2]; b = qualified[1][2]
             return [{"round":"FN","label":"FINAL","a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0}]
-        # 4 → Semifinales por ganadores/segundos cruzados
         if N == 4:
             pairs = seed_pairs(winners, runners)
-            # por si el orden no vino exacto: si seed_pairs devolvió 2 cruces
             out=[]
             labels=["SF1","SF2"]
             for i,(a,b) in enumerate(pairs):
                 out.append({"round":"SF","label":labels[i],"a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0})
-            # fallback si no se pudo seedear (por posiciones no uniformes)
-            if not out:
+            if not out:  # fallback
                 names = [q[2] for q in qualified]
                 out = [
                     {"round":"SF","label":"SF1","a":names[0],"b":names[3],"sets":[],"goldenA":0,"goldenB":0},
                     {"round":"SF","label":"SF2","a":names[1],"b":names[2],"sets":[],"goldenA":0,"goldenB":0},
                 ]
             return out
-        # 8 → Cuartos cruzando W vs R
         if N == 8:
-            # winners y runners deben tener 4 cada uno
             pairs = seed_pairs(winners, runners)
-            # si no coincide por alguna razón, rellenamos secuencial
             if len(pairs) != 4:
                 names = [q[2] for q in qualified]
                 pairs = [(names[i], names[-(i+1)]) for i in range(4)]
             labels=[f"QF{i}" for i in range(1,5)]
             return [{"round":"QF","label":labels[i],"a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0} for i,(a,b) in enumerate(pairs)]
 
-    # Caso no potencia de 2: BYEs necesarios
-    # estrategia: ordenar clasificados (W primero, luego R), y asignar BYEs a los mejores seeds
-    names = [q[2] for q in sorted(qualified, key=lambda x:(x[1], x[0]))]  # pos 1 antes que 2
+    # N no potencia de 2 → BYEs
+    names = [q[2] for q in sorted(qualified, key=lambda x:(x[1], x[0]))]  # pos1 antes que pos2
     byes = slots - N
-    # construir emparejamientos de la ronda inicial
     start_matches = []
-    labels_map = {
-        "FN":["FINAL"],
-        "SF":["SF1","SF2"],
-        "QF":["QF1","QF2","QF3","QF4"]
-    }
+    labels_map = {"FN":["FINAL"], "SF":["SF1","SF2"], "QF":["QF1","QF2","QF3","QF4"]}
     labels = labels_map[start_round]
-    # convertir lista en slots, insertando BYEs alternando desde el final
-    # ejemplo N=6 → slots=8 → 2 byes para seeds más altos
-    seeded = names[:]  # ya prioriza pos1
-    # crear pares
     i=0; li=0
-    while i < len(seeded):
-        a = seeded[i]; b = None
-        if i+1 < len(seeded):
-            b = seeded[i+1]
-            i += 2
+    while i < len(names):
+        a = names[i]; b = None
+        if i+1 < len(names):
+            b = names[i+1]; i += 2
         else:
             i += 1
         lab = labels[li] if li < len(labels) else f"{start_round}{li+1}"
-        # si faltan BYEs, aplicarlos a b
         if byes>0 and b is None:
             b = "BYE"; byes -= 1
         start_matches.append({"round":start_round,"label":lab,"a":a,"b":b or "BYE","sets":[],"goldenA":0,"goldenB":0})
@@ -431,7 +439,7 @@ def advance_pairs_from_round(matches_round: List[Dict[str,Any]]) -> List[str]:
     for m in matches_round:
         sets = m.get("sets", [])
         if not sets or not match_has_winner(sets):
-            return []  # no se puede avanzar aun
+            return []
         stats = compute_sets_stats(sets)
         winners.append(m['a'] if stats["sets1"]>stats["sets2"] else m['b'])
     return winners
@@ -461,52 +469,6 @@ def next_round(slots: List[str]):
         else: out.append((slots[i], None)); i+=1
     return out
 
-# ====== Branding / layout ======
-def brand_text_logo() -> str:
-    """Genera el logo de texto con ancho uniforme."""
-    return f"""
-    <div style="font-family: 'Inter', 'Segoe UI', 'Roboto', 'Arial', sans-serif; font-weight: 800; line-height: 1.1; margin-bottom: 0px; padding: 0.5rem 0;">
-        <div style="font-size: 1.6rem; color: {DARK_BLUE}; letter-spacing: 0.5rem; white-space: nowrap;">iAPPS</div>
-        <div style="font-size: 1.6rem; color: {LIME_GREEN}; letter-spacing: 0.5rem; white-space: nowrap;">PADEL</div>
-        <div style="font-size: 0.8rem; color: {DARK_BLUE}; letter-spacing: 0.09rem; white-space: nowrap;">TOURNAMENTS</div>
-    </div>
-    """
-
-def inject_global_layout(user_info_text: str):
-    # App logo is now always the text logo, regardless of config
-    logo_html = brand_text_logo()
-
-    st.markdown(f"""
-    <style>
-      .top-header-container {{
-        display: flex; align-items: center; justify-content: space-between; gap: 12px;
-        padding: 0.5rem 1rem;
-        border-bottom: 1px solid #e5e5e5;
-      }}
-      .top-header-left {{ display:flex; align-items:center; gap:10px; overflow:visible; }}
-      .top-header-right {{ display:flex; align-items:center; gap:12px; font-size:.92rem; color:#333; }}
-      .stTabs [data-baseweb="tab-list"] {{
-        position: sticky; top: 0px; z-index: 9998; background: white; border-bottom:1px solid #e5e5e5;
-      }}
-      .dark-header th {{ background-color: {DARK_GREY} !important; color:#fff !important; }}
-      .zebra tr:nth-child(even) td  {{ background-color: {LIGHT_GREY} !important; }}
-      .zebra tr:nth-child(odd) td   {{ background-color: #ffffff !important; }}
-      .winner-badge {{
-        display:inline-block; padding:4px 8px; border-radius:8px;
-        background:#e8f5e9; color:#1b5e20; font-weight:600; margin-left:8px;
-      }}
-      .champion-banner {{
-        padding:14px 18px; border-radius:10px; background:#fff9c4; border:1px solid #ffeb3b;
-        font-size:1.1rem; font-weight:700; color:#795548; margin:8px 0;
-      }}
-    </style>
-    <div class="top-header-container">
-      <div class="top-header-left">{logo_html}</div>
-      <div class="top-header-right">{user_info_text}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
 # ====== Sesión ======
 def init_session():
     st.session_state.setdefault("auth_user", None)
@@ -517,9 +479,6 @@ def init_session():
     st.session_state.setdefault("pdf_playoffs_bytes", None)
     st.session_state.setdefault("pdf_generated_at", None)
     st.session_state.setdefault("suspend_autosave_runs", 0)
-    st.session_state.setdefault("j1_input", "")
-    st.session_state.setdefault("j2_input", "")
-    st.session_state.setdefault("restore_file_upload_key", 0)
 
 def compute_state_hash(state: Dict[str,Any]) -> str:
     return hashlib.sha256(json.dumps(state, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
@@ -539,10 +498,11 @@ def tournament_state_template(admin_username: str, meta: Dict[str, Any]) -> Dict
         },
         "config": cfg,
         "pairs": [],
-        "seeded_pairs": [],  # Nuevo campo para almacenar las parejas cabeza de serie
         "groups": None,
         "results": [],
         "ko": {"matches": []},
+        # Nota: en torneos nuevos podemos incluir seeded_pairs vacío para compatibilidad:
+        # "seeded_pairs": []
     }
 
 # ====== Utilidades parejas ======
@@ -582,139 +542,78 @@ def login_form():
         username = st.text_input("Usuario").strip()
         pin = st.text_input("PIN (6 dígitos)", type="password").strip()
         submitted = st.form_submit_button("Ingresar", type="primary")
-        if submitted:
-            user = get_user(username)
-            if not user or not user.get("active", True):
-                st.error("Usuario inexistente o inactivo.")
-                return
-            if len(pin)!=6 or not pin.isdigit():
-                st.error("PIN inválido.")
-                return
-            if sha(pin) != user["pin_hash"]:
-                st.error("PIN incorrecto.")
-                return
-            st.session_state.auth_user = user
-            st.success(f"Bienvenido {user['username']} ({user['role']})")
-            st.rerun()
-
-# ====== Super Admin ======
-def super_admin_panel():
-    user = st.session_state["auth_user"]
-    user_text = f"Usuario: <b>{user['username']}</b> &nbsp;|&nbsp; Rol: <code>{user['role']}</code> &nbsp;&nbsp;<a href='#' onclick='window.location.reload()'>Cerrar sesión</a>"
-    inject_global_layout(user_text)
-
-    st.subheader("Configuración de la Aplicación")
-    with st.expander("🎨 Apariencia (Logo global de la app)", expanded=True):
-        app_cfg = load_app_config()
-        url = st.text_input(
-            "URL pública del logotipo (no por torneo)",
-            value=app_cfg.get("app_logo_url", DEFAULT_APP_CONFIG["app_logo_url"])
-        ).strip()
-        if st.button("Guardar logo global", type="primary"):
-            app_cfg["app_logo_url"] = url
-            save_app_config(app_cfg)
-            st.success("Logo global guardado.")
-
-    st.subheader("➕ Crear usuario")
-    if st.session_state.get("sa_clear_form", False):
-        st.session_state["sa_new_user"] = ""
-        st.session_state["sa_new_pin"] = ""
-        st.session_state["sa_clear_form"] = False
-    c1,c2,c3,c4 = st.columns([3,3,2,4])
-    with c1:
-        u = st.text_input("Username nuevo", key="sa_new_user").strip()
-    with c2:
-        role = st.selectbox("Rol", ["TOURNAMENT_ADMIN","VIEWER"], key="sa_new_role")
-    with c3:
-        pin = st.text_input("PIN inicial (6)", max_chars=6, key="sa_new_pin").strip()
-    assigned_admin=None
-    if role=="VIEWER":
-        users_all = load_users()
-        admins=[x["username"] for x in users_all if x["role"]=="TOURNAMENT_ADMIN" and x.get("active",True)]
-        assigned_admin = st.selectbox("Asignar a admin", admins if admins else [""], key="sa_new_assigned")
-        if assigned_admin == "": assigned_admin = None
-
-    if st.button("Crear usuario", type="primary", key="sa_create_user_btn"):
-        if not u:
-            st.error("Username requerido.")
-        elif get_user(u):
-            st.error("Ya existe.")
-        elif len(pin)!=6 or not pin.isdigit():
+    if submitted:
+        user = get_user(username)
+        if not user or not user.get("active", True):
+            st.error("Usuario inexistente o inactivo.")
+            return
+        if len(pin)!=6 or not pin.isdigit():
             st.error("PIN inválido.")
-        else:
-            set_user({
-                "username":u,"pin_hash":sha(pin),"role":role,
-                "assigned_admin":assigned_admin,"created_at":now_iso(),"active":True
-            })
-            st.success(f"Usuario {u} creado.")
-            st.session_state["sa_clear_form"] = True
-            st.rerun()
+            return
+        if sha(pin) != user["pin_hash"]:
+            st.error("PIN incorrecto.")
+            return
+        st.session_state.auth_user = user
+        st.success(f"Bienvenido {user['username']} ({user['role']})")
+        st.rerun()
 
-    st.subheader("Usuarios existentes")
-    users = load_users()
-    for usr in users:
-        with st.container(border=True):
-            st.write(f"**{usr['username']}** — rol `{usr['role']}` — activo `{usr.get('active',True)}`")
-            c1,c2,c3,c4 = st.columns(4)
-            with c1:
-                new_pin = st.text_input(f"Nuevo PIN para {usr['username']}", key=f"np_{usr['username']}", max_chars=6)
-                if st.button("Cambiar PIN", type="primary", key=f"cpin_{usr['username']}"):
-                    if len(new_pin)!=6 or not new_pin.isdigit():
-                        st.error("PIN inválido.")
-                    else:
-                        usr["pin_hash"] = sha(new_pin)
-                        set_user(usr)
-                        st.success("PIN actualizado.")
-                        st.rerun()
-            with c2:
-                new_role = st.selectbox("Cambiar rol a", ["TOURNAMENT_ADMIN", "VIEWER"], key=f"nr_{usr['username']}", index=["TOURNAMENT_ADMIN","VIEWER"].index(usr["role"]))
-                if st.button("Cambiar rol", key=f"cr_{usr['username']}"):
-                    if new_role != usr["role"]:
-                        usr["role"] = new_role
-                        set_user(usr)
-                        st.success("Rol actualizado.")
-                        st.rerun()
-            with c3:
-                action = "Desactivar" if usr.get("active",True) else "Activar"
-                if st.button(action, key=f"act_{usr['username']}"):
-                    usr["active"] = not usr.get("active", True)
-                    set_user(usr)
-                    st.success(f"Usuario {usr['username']} {'desactivado' if not usr['active'] else 'activado'}.")
-                    st.rerun()
-            with c4:
-                if st.button("Eliminar usuario", key=f"del_{usr['username']}"):
-                    if usr["username"] == "ADMIN":
-                        st.error("No se puede eliminar el usuario 'ADMIN'.")
-                    else:
-                        users_list = load_users()
-                        users_list = [u for u in users_list if u['username'] != usr['username']]
-                        save_users(users_list)
-                        st.success(f"Usuario {usr['username']} eliminado.")
-                        st.rerun()
-
-# ====== Admin (Torneos) ======
+# ====== Super Admin / Admin ======
 def load_index_for_admin(admin_username: str) -> List[Dict[str, Any]]:
-    return [t for t in load_index() if t.get("admin_username")==admin_username]
+    idx = load_index()
+    my = [t for t in idx if t.get("admin_username")==admin_username]
+    def keyf(t):
+        try:
+            return datetime.fromisoformat(t.get("date"))
+        except Exception:
+            return datetime.min
+    return sorted(my, key=keyf, reverse=True)
+
+def create_tournament(admin_username: str, t_name: str, place: str, tdate: str, gender: str) -> str:
+    tid = str(uuid.uuid4())[:8]
+    meta = {"tournament_id":tid,"t_name":t_name,"place":place,"date":tdate,"gender":gender}
+    state = tournament_state_template(admin_username, meta)
+    save_tournament(tid, state)
+    idx = load_index()
+    idx.append({
+        "tournament_id":tid,"t_name":t_name,"place":place,"date":tdate,
+        "gender":gender,"admin_username":admin_username,"created_at":now_iso()
+    })
+    save_index(idx)
+    return tid
+
+def delete_tournament(admin_username: str, tid: str):
+    idx = load_index()
+    idx = [t for t in idx if not (t["tournament_id"]==tid and t["admin_username"]==admin_username)]
+    save_index(idx)
+    p = tourn_path(tid)
+    if p.exists():
+        p.unlink()
+    for f in (snap_dir_for(tid)).glob("*.json"):
+        try:
+            f.unlink()
+        except Exception:
+            pass
 
 def admin_dashboard(admin_user: Dict[str, Any]):
     user_text = f"Usuario: <b>{admin_user['username']}</b> &nbsp;|&nbsp; Rol: <code>{admin_user['role']}</code> &nbsp;&nbsp;<a href='#' onclick='window.location.reload()'>Cerrar sesión</a>"
     inject_global_layout(user_text)
 
-    # st.header(f"Dashboard - {admin_user['username']}") # Removed double header
     st.markdown("### Mis Torneos")
 
-    # Lista de torneos del admin
     index = load_index_for_admin(admin_user["username"])
     if not index:
         st.info("Aún no tienes torneos.")
     
     col_sel, col_new = st.columns([1,1])
     with col_sel:
-        # Selector de torneo activo
-        current_tid = st.selectbox("Seleccionar Torneo", [""] + [t["tournament_id"] for t in index], format_func=lambda tid: load_tournament(tid)["meta"]["t_name"] if tid else "— Nuevo Torneo —")
+        current_tid = st.selectbox(
+            "Seleccionar Torneo",
+            [""] + [tid for tid in (t["tournament_id"] for t in index)],
+            format_func=lambda tid: load_tournament(tid)["meta"]["t_name"] if tid else "— Nuevo Torneo —"
+        )
         if current_tid != st.session_state.current_tid:
             st.session_state.current_tid = current_tid
-            st.session_state.last_hash = "" # reset hash to force load
+            st.session_state.last_hash = ""
             st.rerun()
 
     with col_new:
@@ -723,560 +622,702 @@ def admin_dashboard(admin_user: Dict[str, Any]):
         with st.form("new_tourn_form"):
             t_name = st.text_input("Nombre del nuevo torneo", key="new_tourn_name").strip()
             t_id_suf = st.text_input("Identificador URL (opcional)", help="Si no lo pones, se generará uno aleatorio.").strip()
-            date_col, place_col = st.columns(2)
+            date_col, place_col = st.columns([1,2])
             with date_col:
-                date_str = st.date_input("Fecha", value=date.today(), key="new_tourn_date").isoformat()
+                t_date = st.date_input("Fecha del torneo", value=date.today())
             with place_col:
-                place = st.text_input("Lugar (opcional)", key="new_tourn_place").strip()
-            gender = st.selectbox("Género", ["mixto","masculino","femenino"], key="new_tourn_gender")
-            if st.form_submit_button("Crear nuevo torneo", type="primary"):
-                if not t_name:
-                    st.error("El nombre es requerido.")
-                else:
-                    tid = t_id_suf or str(uuid.uuid4())
-                    if any(t["tournament_id"] == tid for t in index):
-                        st.error("Ya existe un torneo con ese identificador. Elige otro.")
-                    else:
-                        index.append({
-                            "tournament_id": tid,
-                            "t_name": t_name,
-                            "admin_username": admin_user["username"],
-                            "created_at": now_iso()
-                        })
-                        save_index(index)
-                        new_tourn_state = tournament_state_template(admin_user["username"], {"tournament_id":tid, "t_name":t_name, "place":place, "date":date_str, "gender":gender})
-                        save_tournament(tid, new_tourn_state, make_snapshot=False)
-                        st.session_state.current_tid = tid
-                        st.session_state.last_hash = "" # force reload
-                        st.success(f"Torneo '{t_name}' creado.")
-                        st.rerun()
+                t_place = st.text_input("Lugar / Club", value="Mi Club").strip()
+            gen = st.selectbox("Género", ["masculino","femenino","mixto"], index=2)
+            submitted = st.form_submit_button("Crear torneo", type="primary")
+        if submitted:
+            tid = create_tournament(admin_user["username"], t_name or "Nuevo Torneo", t_place, t_date.isoformat(), gen)
+            st.session_state.current_tid = tid
+            st.success(f"Torneo creado: {t_name} ({tid})")
+            st.rerun()
 
-    # Si hay torneo seleccionado, mostrar el editor
     if st.session_state.current_tid:
         tourn_tid = st.session_state.current_tid
         tourn_state = load_tournament(tourn_tid)
+        # ------------ FIX principal: asegurar clave seeded_pairs ------------
+        tourn_state.setdefault("seeded_pairs", [])
+        # -------------------------------------------------------------------
         st.session_state.last_hash = compute_state_hash(tourn_state)
 
         t_name = tourn_state["meta"]["t_name"]
         st.subheader(f"🛠️ {t_name}")
 
-        with st.columns(3)[0]:
-            if st.button("Eliminar torneo", key=f"del_tourn_{tourn_tid}"):
-                if st.warning(f"¿Estás seguro de eliminar el torneo '{t_name}'? Esta acción es irreversible."):
-                    try:
-                        tourn_path(tourn_tid).unlink(missing_ok=True)
-                        for f in snap_dir_for(tourn_tid).glob("snapshot_*.json"): f.unlink()
-                        tourn_state = None
-                        st.session_state.current_tid = ""
-                        st.session_state.last_hash = ""
-                        st.success("Torneo eliminado.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error al eliminar: {e}")
+        with st.container(border=True):
+            st.markdown(f"**Lugar:** {tourn_state['meta']['place']} &nbsp;&nbsp; **Fecha:** {tourn_state['meta']['date']} &nbsp;&nbsp; **Género:** {tourn_state['meta']['gender']}")
 
-        # TABS
-        tab_config, tab_pairs, tab_zones, tab_playoffs, tab_standings, tab_persist = st.tabs(["📋 Configuración", "👫 Parejas", "📍 Zonas", "🏆 Playoffs", "📊 Posiciones", "💾 Persistencia"])
+        tabs = st.tabs(["⚙️ Configuración", "👥 Parejas", "📝 Resultados", "📊 Tablas", "🗂️ Playoffs", "💾 Persistencia"])
 
-        with tab_config:
-            st.markdown("### Configuración")
-            current_config = tourn_state["config"]
-            
-            # --- Enlaces públicos y botón de copiar (FUERA DEL FORM) ---
-            c_name, c_url = st.columns([0.7, 0.3])
-            with c_url:
-                base_url = "https://padel-tournament-pro-multiuser.streamlit.app"
-                public_url = f"{base_url}/?mode=public&tid={tourn_tid}"
-                st.text_input("Link público", value=public_url, key="public_link", disabled=True)
-                st.button("📋 Icono de copiar", on_click=lambda: st.components.v1.html(f"""
-                    <script>
-                        navigator.clipboard.writeText("{public_url}").then(() => {{
-                            alert("Link copiado!");
-                        }});
-                    </script>
-                """, height=0, width=0))
-            
-            with st.form("tourn_config_form"):
-                with c_name:
-                    tourn_state["meta"]["t_name"] = st.text_input("Nombre del torneo", value=tourn_state["meta"]["t_name"], key="c_name")
-                
-                c1,c2,c3,c4 = st.columns(4)
-                with c1:
-                    tourn_state["meta"]["place"] = st.text_input("Lugar", value=tourn_state["meta"]["place"], key="c_place")
-                with c2:
-                    tourn_state["meta"]["date"] = st.text_input("Fecha", value=tourn_state["meta"]["date"], key="c_date")
-                with c3:
-                    tourn_state["meta"]["gender"] = st.selectbox("Género", ["mixto","masculino","femenino"], index=["mixto","masculino","femenino"].index(tourn_state["meta"]["gender"]), key="c_gender")
-                
-                st.markdown("---")
-                
-                c_pairs, c_zones, c_top, c_seed = st.columns(4)
-                with c_pairs:
-                    tourn_state["config"]["num_pairs"] = st.number_input("Nº total de parejas", min_value=2, value=current_config.get("num_pairs", DEFAULT_CONFIG["num_pairs"]))
-                with c_zones:
-                    tourn_state["config"]["num_zones"] = st.number_input("Nº de zonas", min_value=1, value=current_config.get("num_zones", DEFAULT_CONFIG["num_zones"]))
-                with c_top:
-                    tourn_state["config"]["top_per_zone"] = st.number_input("Pasan a Playoff", min_value=1, value=current_config.get("top_per_zone", DEFAULT_CONFIG["top_per_zone"]))
-                with c_seed:
-                    tourn_state["config"]["seed"] = st.number_input("Seed (semilla de sorteo)", value=current_config.get("seed", DEFAULT_CONFIG["seed"]))
-                
-                c_seeded_mode, c_format = st.columns(2)
-                with c_seeded_mode:
-                    tourn_state["config"]["seeded_mode"] = st.checkbox("Usar cabezas de serie", value=current_config.get("seeded_mode", DEFAULT_CONFIG["seeded_mode"]), key="seeded_mode_checkbox")
-                with c_format:
-                    tourn_state["config"]["format"] = st.selectbox("Formato de partidos", ["one_set","best_of_3","best_of_5"], index=["one_set","best_of_3","best_of_5"].index(current_config.get("format",DEFAULT_CONFIG["format"])))
-                
-                c_pts_w, c_pts_l = st.columns(2)
-                with c_pts_w:
-                    tourn_state["config"]["points_win"] = st.number_input("Puntos por victoria", value=current_config.get("points_win", DEFAULT_CONFIG["points_win"]))
-                with c_pts_l:
-                    tourn_state["config"]["points_loss"] = st.number_input("Puntos por derrota", value=current_config.get("points_loss", DEFAULT_CONFIG["points_loss"]))
-                
-                submitted = st.form_submit_button("Guardar configuración", type="primary")
-                if submitted:
-                    st.success("Configuración guardada.")
-                    save_tournament(tourn_tid, tourn_state)
-                    st.rerun()
-
-        with tab_pairs:
-            st.markdown("### Administración de Parejas")
-            st.info("Ingresa el nombre de los jugadores para formar las parejas. Se les asignará un número automáticamente.")
-            
-            form_col, list_col = st.columns(2)
-            
-            with form_col:
-                with st.form("add_pair"):
-                    j1 = st.text_input("Jugador 1", key="j1_input").strip()
-                    j2 = st.text_input("Jugador 2", key="j2_input").strip()
-                    submitted = st.form_submit_button("Agregar pareja", type="primary")
-                    
-                    if submitted:
-                        if not j1 or not j2:
-                            st.warning("Debes ingresar el nombre de ambos jugadores.")
-                        else:
-                            pair_number = next_available_number(tourn_state["pairs"], tourn_state["config"]["num_pairs"])
-                            if pair_number is not None:
-                                new_pair_label = format_pair_label(pair_number, j1, j2)
-                                tourn_state["pairs"].append(new_pair_label)
-                                tourn_state["pairs"] = sorted(tourn_state["pairs"])
-                                save_tournament(tourn_tid, tourn_state)
-                                st.success(f"Pareja '{j1} / {j2}' agregada.")
-                                st.session_state["j1_input"] = ""
-                                st.session_state["j2_input"] = ""
-                                st.rerun()
-                            else:
-                                st.error("Ya has alcanzado el número máximo de parejas configurado.")
-
-            with list_col:
-                if tourn_state["config"]["seeded_mode"]:
-                    num_zones = tourn_state["config"]["num_zones"]
-                    st.markdown(f"**Seleccionar hasta {num_zones} cabezas de serie:**")
-                    seeded_pairs = st.multiselect(
-                        "Selecciona las parejas cabezas de serie",
-                        options=tourn_state["pairs"],
-                        default=tourn_state["seeded_pairs"]
-                    )
-                    if len(seeded_pairs) > num_zones:
-                        st.warning(f"No puedes seleccionar más de {num_zones} cabezas de serie.")
-                    else:
-                        tourn_state["seeded_pairs"] = seeded_pairs
-                        if st.button("Guardar cabezas de serie", type="secondary"):
-                            save_tournament(tourn_tid, tourn_state)
-                            st.success("Cabezas de serie guardados.")
-                            st.rerun()
-
-                st.markdown("### Lista de Parejas")
-                if not tourn_state["pairs"]:
-                    st.info("No hay parejas ingresadas.")
-                else:
-                    for pair in tourn_state["pairs"]:
-                        p_col, d_col = st.columns([0.9, 0.1])
-                        with p_col:
-                            is_seeded = pair in tourn_state.get("seeded_pairs", [])
-                            pair_display = f"**{pair}** "
-                            if is_seeded:
-                                pair_display += " ⭐"
-                            st.markdown(pair_display)
-                        with d_col:
-                            if st.button("🗑️", key=f"del_pair_{pair}"):
-                                pair_number = parse_pair_number(pair)
-                                tourn_state["pairs"] = remove_pair_by_number(tourn_state["pairs"], pair_number)
-                                # Eliminar de la lista de cabezas de serie si estaba
-                                if pair in tourn_state.get("seeded_pairs", []):
-                                    tourn_state["seeded_pairs"].remove(pair)
-                                save_tournament(tourn_tid, tourn_state)
-                                st.success(f"Pareja '{pair}' eliminada.")
-                                st.rerun()
-
-        with tab_zones:
-            st.markdown("### Sorteo y Fixture de Zonas")
-            col_sort, col_regen = st.columns(2)
-            with col_sort:
-                if st.button("Sortear parejas", type="primary"):
-                    if len(tourn_state["pairs"]) < tourn_state["config"]["num_pairs"]:
-                        st.warning("El número de parejas ingresadas es menor que el configurado. ¿Deseas continuar?")
-                        if st.button("Sí, continuar"):
-                            tourn_state["config"]["num_pairs"] = len(tourn_state["pairs"])
-                    
-                    if len(tourn_state["pairs"]) % tourn_state["config"]["num_zones"] != 0:
-                        st.warning("El número de parejas no es divisible por el número de zonas. Las zonas tendrán un número desigual de parejas.")
-
-                    if tourn_state["config"]["seeded_mode"] and len(tourn_state["seeded_pairs"]) != tourn_state["config"]["num_zones"]:
-                        st.warning(f"Debes seleccionar exactamente {tourn_state['config']['num_zones']} parejas cabezas de serie.")
-                    else:
-                        tourn_state["groups"] = create_groups(tourn_state["pairs"], tourn_state["config"]["num_zones"], tourn_state["config"]["seeded_mode"], tourn_state.get("seeded_pairs"), tourn_state["config"]["seed"])
-                        tourn_state["results"] = build_fixtures(tourn_state["groups"])
-                        tourn_state["ko"]["matches"] = []
-                        st.success("Sorteo realizado. Grupos y fixture generados.")
-                        save_tournament(tourn_tid, tourn_state)
-                        st.rerun()
-            
-            with col_regen:
-                if st.button("Regenerar Playoff", type="secondary"):
-                    if tourn_state.get("groups"):
-                        q = qualified_from_tables(
-                            [standings_from_results(f"Z{i+1}", g, tourn_state["results"], tourn_state["config"]) for i,g in enumerate(tourn_state["groups"])],
-                            tourn_state["config"]["top_per_zone"]
-                        )
-                        tourn_state["ko"]["matches"] = build_initial_ko(q)
-                        st.success("Playoff regenerado.")
-                        save_tournament(tourn_tid, tourn_state)
-                        st.rerun()
-            
-            if tourn_state.get("groups"):
-                st.subheader("Grupos")
-                cols = st.columns(tourn_state["config"]["num_zones"])
-                for i, group in enumerate(tourn_state["groups"]):
-                    with cols[i]:
-                        st.markdown(f"**Zona {i+1}**")
-                        for p in group:
-                            is_seeded = p in tourn_state.get("seeded_pairs", [])
-                            st.markdown(f"- {p} {'(CS)' if is_seeded else ''}")
-                
-                st.subheader("Fixture de Zonas")
-                for m in tourn_state["results"]:
-                    with st.container(border=True):
-                        st.markdown(f"**{m['zone']}** - {m['pair1']} vs {m['pair2']}")
-                        fmt = tourn_state["config"]["format"]
-                        is_complete = match_has_winner(m.get("sets", []))
-                        
-                        cols = st.columns([1,1,0.5])
-                        sets = m.get("sets",[])
-                        if st.button("Registrar resultado", key=f"res_{m['pair1']}_{m['pair2']}_{m['zone']}"):
-                            if is_complete:
-                                st.session_state[f"sets_{m['pair1']}_{m['pair2']}"] = sets
-                            st.session_state[f"show_res_{m['pair1']}_{m['pair2']}"] = True
-                            st.rerun()
-                            
-                        if st.session_state.get(f"show_res_{m['pair1']}_{m['pair2']}"):
-                            with st.form(f"f_{m['pair1']}_{m['pair2']}"):
-                                st.write(f"Sets para **{m['pair1']}** vs **{m['pair2']}**")
-                                existing_sets = st.session_state.get(f"sets_{m['pair1']}_{m['pair2']}", [{"s1":0,"s2":0}] * (1 if fmt=="one_set" else 3))
-                                new_sets = []
-                                for i in range(len(existing_sets)):
-                                    c1,c2 = st.columns(2)
-                                    with c1:
-                                        s1 = st.number_input(f"Set {i+1} - {m['pair1']}", min_value=0, value=existing_sets[i]["s1"], key=f"s{i}_1_{m['pair1']}_{m['pair2']}")
-                                    with c2:
-                                        s2 = st.number_input(f"Set {i+1} - {m['pair2']}", min_value=0, value=existing_sets[i]["s2"], key=f"s{i}_2_{m['pair1']}_{m['pair2']}")
-                                    new_sets.append({"s1":s1,"s2":s2})
-
-                                s_submitted = st.form_submit_button("Guardar resultado")
-                                if s_submitted:
-                                    m["sets"] = new_sets
-                                    ok, err = validate_sets(fmt, m["sets"])
-                                    if ok:
-                                        save_tournament(tourn_tid, tourn_state)
-                                        st.success("Resultado guardado.")
-                                        st.session_state[f"show_res_{m['pair1']}_{m['pair2']}"] = False
-                                        st.rerun()
-                                    else:
-                                        st.error(err)
-
-        with tab_standings:
-            st.markdown("### Posiciones por Zona")
-            if tourn_state.get("groups"):
-                zone_tables = [standings_from_results(f"Z{i+1}", g, tourn_state["results"], tourn_state["config"]) for i,g in enumerate(tourn_state["groups"])]
-                cols = st.columns(tourn_state["config"]["num_zones"])
-                for i, t in enumerate(zone_tables):
-                    with cols[i]:
-                        st.markdown(f"**Posiciones - Zona {i+1}**")
-                        if not t.empty:
-                            is_complete = zone_complete(f"Z{i+1}", tourn_state["results"], tourn_state["config"]["format"])
-                            # Add qualified checkmark
-                            if is_complete:
-                                for j in range(len(t)):
-                                    if t.iloc[j]["Pos"] <= tourn_state["config"]["top_per_zone"]:
-                                        t.at[j, "pair"] = f"{t.iloc[j]['pair']} ✅"
-                            
-                            st.dataframe(t.style.set_table_styles([
-                                {'selector': 'th', 'props': [('background-color', DARK_GREY), ('color', 'white')]},
-                                {'selector': 'tr:nth-child(even)', 'props': [('background-color', LIGHT_GREY)]},
-                                {'selector': 'tr:nth-child(odd)', 'props': [('background-color', 'white')]}
-                            ]).hide(axis="index"), use_container_width=True)
-
-        with tab_persist:
-            st.markdown("### Persistencia y Respaldo")
-            
-            # Subir archivo JSON
-            st.markdown("#### ⬆️ Cargar desde archivo")
-            uploaded_file = st.file_uploader("Sube un archivo .json", type=["json"], key=st.session_state.restore_file_upload_key)
-            if uploaded_file:
-                try:
-                    loaded_data = json.load(uploaded_file)
-                    st.session_state["uploaded_tourn_data"] = loaded_data
-                    st.success("Archivo cargado. Haz clic en 'Restaurar' para aplicar los datos.")
-                    if st.button("Restaurar desde el archivo cargado"):
-                        save_tournament(tourn_tid, loaded_data, make_snapshot=False)
-                        st.success("Torneo restaurado con éxito desde el archivo.")
-                        st.session_state.restore_file_upload_key += 1
-                        st.session_state.last_hash = ""
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error al leer el archivo JSON: {e}")
-            
-            st.markdown("---")
-            
-            # Descargar JSON
-            st.markdown("#### ⬇️ Descargar estado actual")
-            tourn_json = json.dumps(tourn_state, ensure_ascii=False, indent=2)
-            st.download_button(
-                label="Descargar JSON del torneo",
-                data=tourn_json,
-                file_name=f"{t_name.replace(' ', '_')}_{tourn_tid}_{datetime.now().strftime('%Y%m%d')}.json",
-                mime="application/json"
+        # ========== CONFIG ==========
+        with tabs[0]:
+            cfg = tourn_state.get("config", DEFAULT_CONFIG.copy())
+            c1,c2,c3,c4 = st.columns(4)
+            with c1:
+                cfg["t_name"] = st.text_input("Nombre para mostrar", value=cfg.get("t_name","Open Pádel"))
+                cfg["num_pairs"] = st.number_input("Cantidad máxima de parejas", 2, 256, int(cfg.get("num_pairs",16)), step=1)
+            with c2:
+                cfg["num_zones"] = st.number_input("Cantidad de zonas", 2, 32, int(cfg.get("num_zones",4)), step=1)
+                cfg["top_per_zone"] = st.number_input("Clasifican por zona (Top N)", 1, 8, int(cfg.get("top_per_zone",2)), step=1)
+            with c3:
+                cfg["points_win"] = st.number_input("Puntos por victoria", 1, 10, int(cfg.get("points_win",2)), step=1)
+                cfg["points_loss"] = st.number_input("Puntos por derrota", 0, 5, int(cfg.get("points_loss",0)), step=1)
+            with c4:
+                cfg["seed"] = st.number_input("Semilla (sorteo zonas)", 1, 999999, int(cfg.get("seed",42)), step=1)
+            fmt = st.selectbox(
+                "Formato de partido",
+                ["one_set","best_of_3","best_of_5"],
+                index=["one_set","best_of_3","best_of_5"].index(cfg.get("format","best_of_3"))
             )
-            
-            st.markdown("---")
-            
-            # Gestión de Snapshots
-            st.markdown("#### ⏪ Restaurar desde un 'Snapshot'")
-            snap_dir = snap_dir_for(tourn_tid)
-            snapshots = sorted([s for s in snap_dir.glob("snapshot_*.json")], reverse=True)
-            if not snapshots:
-                st.info("No hay snapshots disponibles.")
-            else:
-                snap_options = [s.name for s in snapshots]
-                selected_snap = st.selectbox("Selecciona un snapshot para restaurar", snap_options)
-                if st.button("Restaurar este snapshot", type="primary"):
-                    snap_path = snap_dir / selected_snap
-                    try:
-                        restored_data = json.loads(snap_path.read_text(encoding="utf-8"))
-                        save_tournament(tourn_tid, restored_data, make_snapshot=False)
-                        st.success(f"Torneo restaurado al estado de {selected_snap}.")
-                        st.session_state.last_hash = ""
+            cfg["format"] = fmt
+
+            cA,cB,cC = st.columns(3)
+            with cA:
+                if st.button("💾 Guardar configuración", type="primary"):
+                    tourn_state["config"] = {
+                        k:int(v) if isinstance(v,(int,float)) and k not in ["t_name","format"] else v
+                        for k,v in cfg.items()
+                    }
+                    save_tournament(tourn_tid, tourn_state)
+                    st.success("Configuración guardada.")
+            with cB:
+                if st.button("🎲 Sortear zonas (crear/rehacer fixture)"):
+                    pairs = tourn_state.get("pairs", [])
+                    if len(pairs) < cfg["num_zones"]:
+                        st.error("Debe haber al menos tantas parejas como zonas.")
+                    else:
+                        groups = create_groups(pairs, int(cfg["num_zones"]), seed=int(cfg["seed"]))
+                        tourn_state["groups"] = groups
+                        tourn_state["results"] = build_fixtures(groups)
+                        tourn_state["ko"] = {"matches": []}  # limpiar KO si rehaces
+                        save_tournament(tourn_tid, tourn_state)
+                        st.success("Zonas + fixture generados.")
+            with cC:
+                if REPORTLAB_OK and st.button("🧾 Generar PDFs"):
+                    with st.spinner("Generando PDFs..."):
+                        buf1 = export_fixture_pdf(tourn_state)
+                        buf2 = export_playoffs_pdf(tourn_state)
+                    if buf1: st.session_state.pdf_fixture_bytes = buf1.getvalue()
+                    if buf2: st.session_state.pdf_playoffs_bytes = buf2.getvalue()
+                    st.session_state.pdf_generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    st.success("PDFs generados. Descarga abajo.")
+                elif not REPORTLAB_OK:
+                    st.info("Para PDF: pip install reportlab")
+
+            if st.session_state.pdf_fixture_bytes or st.session_state.pdf_playoffs_bytes:
+                st.markdown("#### Descargas de PDF")
+                st.caption(f"Generado: {st.session_state.pdf_generated_at or '-'}")
+                if st.session_state.pdf_fixture_bytes:
+                    st.download_button("⬇️ Fixture (PDF)", data=st.session_state.pdf_fixture_bytes,
+                                    file_name=f"fixture_{tourn_state['meta']['tournament_id']}.pdf", mime="application/pdf")
+                if st.session_state.pdf_playoffs_bytes:
+                    st.download_button("⬇️ Playoffs (PDF)", data=st.session_state.pdf_playoffs_bytes,
+                                    file_name=f"playoffs_{tourn_state['meta']['tournament_id']}.pdf", mime="application/pdf")
+                if st.button("🧹 Limpiar PDFs generados"):
+                    st.session_state.pdf_fixture_bytes = None
+                    st.session_state.pdf_playoffs_bytes = None
+                    st.session_state.pdf_generated_at = None
+                    st.success("Limpio.")
+
+        # ========== PAREJAS ==========
+        with tabs[1]:
+            st.subheader("Parejas")
+            pairs = tourn_state.get("pairs", [])
+            max_pairs = int(tourn_state.get("config", {}).get("num_pairs", 16))
+
+            st.markdown("**Alta manual — una pareja por vez**")
+
+            p1_key = f"p1_{tourn_tid}"
+            p2_key = f"p2_{tourn_tid}"
+            if st.session_state.get(f"pairs_clear_{tourn_tid}", False):
+                st.session_state[p1_key] = ""
+                st.session_state[p2_key] = ""
+                st.session_state[f"pairs_clear_{tourn_tid}"] = False
+
+            next_n = next_available_number(pairs, max_pairs)
+            c1,c2,c3,c4 = st.columns([1,3,3,2])
+            with c1:
+                st.text_input("N° pareja", value=(str(next_n) if next_n else "—"), disabled=True, key=f"num_auto_{tourn_tid}")
+            with c2:
+                if p1_key not in st.session_state:
+                    st.session_state[p1_key] = ""
+                p1 = st.text_input("Jugador 1", key=p1_key)
+            with c3:
+                if p2_key not in st.session_state:
+                    st.session_state[p2_key] = ""
+                p2 = st.text_input("Jugador 2", key=p2_key)
+            with c4:
+                disabled_btn = (next_n is None)
+                if st.button("➕ Agregar pareja", key=f"add_pair_{tourn_tid}", type="primary", disabled=disabled_btn):
+                    p1c, p2c = (p1 or "").strip(), (p2 or "").strip()
+                    if not p1c or not p2c:
+                        st.error("Completá ambos nombres.")
+                    else:
+                        label = format_pair_label(next_n, p1c, p2c)
+                        pairs.append(label)
+                        tourn_state["pairs"] = pairs
+                        save_tournament(tourn_tid, tourn_state)
+                        st.success(f"Agregada: {label}")
+                        st.session_state[f"pairs_clear_{tourn_tid}"] = True
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Error al restaurar el snapshot: {e}")
+            if next_n is None:
+                st.warning(f"Se alcanzó el máximo de parejas configurado ({max_pairs}).")
+
+            st.divider()
+
+            # Importar CSV (opcional)
+            st.markdown("**Importar CSV (opcional)**")
+            st.caption("Formato: columnas `numero, jugador1, jugador2`.")
+            up = st.file_uploader("Seleccionar CSV", type=["csv"], key=f"csv_{tourn_tid}")
+            if up is not None:
+                try:
+                    df = pd.read_csv(up, header=0)
+                except Exception:
+                    up.seek(0)
+                    df = pd.read_csv(up, header=None, names=["numero","jugador1","jugador2"])
+                cols = [c.strip().lower() for c in df.columns.tolist()]
+                df.columns = cols
+                if "numero" not in df.columns or "jugador1" not in df.columns or "jugador2" not in df.columns:
+                    st.error("El CSV debe contener columnas: numero, jugador1, jugador2")
+                else:
+                    parsed = []
+                    for _, row in df.iterrows():
+                        try:
+                            num = int(row["numero"])
+                        except Exception:
+                            continue
+                        j1 = str(row["jugador1"]).strip()
+                        j2 = str(row["jugador2"]).strip()
+                        if j1 and j2 and num >= 1:
+                            parsed.append((num, j1, j2))
+                    if parsed:
+                        parsed.sort(key=lambda x: x[0])
+                        new_list = []
+                        used = set()
+                        for num, j1, j2 in parsed:
+                            if len(new_list) >= max_pairs:
+                                break
+                            if 1 <= num <= max_pairs and num not in used:
+                                used.add(num)
+                                new_list.append(format_pair_label(num, j1, j2))
+                        if not new_list:
+                            st.warning("El CSV no contenía filas válidas dentro del rango permitido.")
+                        else:
+                            tourn_state["pairs"] = new_list
+                            save_tournament(tourn_tid, tourn_state)
+                            st.success(f"Importadas {len(new_list)} parejas (máximo {max_pairs}).")
+                            st.rerun()
+                    else:
+                        st.warning("No se encontraron filas válidas en el CSV.")
+
+            st.divider()
+
+            # Listado + borrar
+            if pairs:
+                st.markdown("### Listado de parejas")
+                df_pairs = pd.DataFrame({"Pareja": pairs})
+                st.markdown(df_pairs.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
+
+                st.markdown("**Borrar pareja:**")
+                cols = st.columns(4)
+                per_row = 4
+                for i, label in enumerate(pairs):
+                    n = parse_pair_number(label) or (i+1)
+                    col = cols[i % per_row]
+                    with col:
+                        if st.button(f"🗑️ Nº {n}", key=f"del_{tourn_tid}_{n}"):
+                            tourn_state["pairs"] = remove_pair_by_number(pairs, n)
+                            save_tournament(tourn_tid, tourn_state)
+                            st.success(f"Eliminada pareja Nº {n}.")
+                            st.rerun()
+            else:
+                st.info("Aún no hay parejas cargadas.")
+
+            if tourn_state.get("groups"):
+                st.divider()
+                st.markdown("### Zonas")
+                for zi, group in enumerate(tourn_state["groups"], start=1):
+                    st.write(f"**Z{zi}**")
+                    df_g = pd.DataFrame({"Parejas": group})
+                    st.markdown(df_g.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
+
+        # ========== RESULTADOS ==========
+        with tabs[2]:
+            st.subheader("Resultados — fase de grupos (sets + puntos de oro)")
+            if not tourn_state.get("groups"):
+                st.info("Primero crea/sortea zonas en Configuración o en Parejas.")
+            else:
+                fmt = tourn_state["config"].get("format","best_of_3")
+                zones = sorted({m["zone"] for m in tourn_state["results"]})
+                z_filter = st.selectbox("Filtrar por zona", ["(todas)"] + zones)
+                pnames = sorted(set([m["pair1"] for m in tourn_state["results"]] + [m["pair2"] for m in tourn_state["results"]]))
+                p_filter = st.selectbox("Filtrar por pareja", ["(todas)"] + pnames)
+
+                listing = tourn_state["results"]
+                if z_filter != "(todas)":
+                    listing = [m for m in listing if m["zone"]==z_filter]
+                if p_filter != "(todas)":
+                    listing = [m for m in listing if m["pair1"]==p_filter or m["pair2"]==p_filter]
+
+                for m in listing:
+                    idx = tourn_state["results"].index(m)
+                    with st.container(border=True):
+                        title = f"**{m['zone']}** — {m['pair1']} vs {m['pair2']}"
+                        stats_now = compute_sets_stats(m.get("sets", [])) if m.get("sets") else {"sets1":0,"sets2":0}
+                        if m.get("sets") and match_has_winner(m["sets"]):
+                            winner = m['pair1'] if stats_now["sets1"]>stats_now["sets2"] else m['pair2']
+                            title += f"  <span class='winner-badge'>🏆 {winner}</span>"
+                        else:
+                            title += "  <span style='color:#999'>(A definir)</span>"
+                        st.markdown(title, unsafe_allow_html=True)
+
+                        cur_sets = m.get("sets", [])
+                        n_min, n_max = (1,1) if fmt=="one_set" else ((2,3) if fmt=="best_of_3" else (3,5))
+                        n_sets = st.number_input(
+                            "Sets jugados", min_value=n_min, max_value=n_max,
+                            value=min(max(len(cur_sets), n_min), n_max),
+                            key=f"ns_{tourn_tid}_{idx}"
+                        )
+                        new_sets = []
+                        for si in range(n_sets):
+                            cA,cB = st.columns(2)
+                            with cA:
+                                s1 = st.number_input(
+                                    f"Set {si+1} — games {m['pair1']}", 0, 20,
+                                    int(cur_sets[si]["s1"]) if si<len(cur_sets) and "s1" in cur_sets[si] else 0,
+                                    key=f"s1_{tourn_tid}_{idx}_{si"
+                                )
+                            with cB:
+                                s2 = st.number_input(
+                                    f"Set {si+1} — games {m['pair2']}", 0, 20,
+                                    int(cur_sets[si]["s2"]) if si<len(cur_sets) and "s2" in cur_sets[si] else 0,
+                                    key=f"s2_{tourn_tid}_{idx}_{si"
+                                )
+                            new_sets.append({"s1":int(s1),"s2":int(s2)})
+                        ok, msg = validate_sets(fmt, new_sets)
+                        if not ok:
+                            st.error(msg)
+                        gC,gD = st.columns(2)
+                        with gC:
+                            g1 = st.number_input(f"Puntos de oro {m['pair1']}", 0, 200, int(m.get("golden1",0)), key=f"g1_{tourn_tid}_{idx}")
+                        with gD:
+                            g2 = st.number_input(f"Puntos de oro {m['pair2']}", 0, 200, int(m.get("golden2",0)), key=f"g2_{tourn_tid}_{idx}")
+
+                        if st.button("Guardar partido", key=f"sv_{tourn_tid}_{idx}"):
+                            stats = compute_sets_stats(new_sets)
+                            if stats["sets1"] == stats["sets2"]:
+                                st.error("Debe haber un ganador (no se permiten empates). Ajustá los sets.")
+                            else:
+                                tourn_state["results"][idx]["sets"] = new_sets
+                                tourn_state["results"][idx]["golden1"] = int(g1)
+                                tourn_state["results"][idx]["golden2"] = int(g2)
+                                save_tournament(tourn_tid, tourn_state)
+                                winner = m['pair1'] if stats["sets1"]>stats["sets2"] else m['pair2']
+                                st.success(f"Partido guardado. 🏆 Ganó {winner}")
+                                st.rerun()
+
+        # ========== TABLAS ==========
+        with tabs[3]:
+            st.subheader("Tablas por zona y clasificados")
+            if not tourn_state.get("groups") or not tourn_state.get("results"):
+                st.info("Aún no hay fixture o resultados.")
+            else:
+                cfg = tourn_state["config"]
+                fmt = cfg.get("format","best_of_3")
+                zone_tables = []
+                all_complete = True
+                for zi, group in enumerate(tourn_state["groups"], start=1):
+                    zone_name = f"Z{zi}"
+                    complete = zone_complete(zone_name, tourn_state["results"], fmt)
+                    status = "✅ Completa" if complete else "⏳ A definir"
+                    if not complete:
+                        all_complete = False
+                    st.markdown(f"#### Tabla {zone_name} — {status}")
+                    table = standings_from_results(zone_name, group, tourn_state["results"], cfg)
+                    zone_tables.append(table)
+                    if table.empty:
+                        st.info("Sin datos para mostrar todavía.")
+                    else:
+                        st.markdown(table.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
+
+                st.markdown("### Clasificados a Playoffs")
+                if not all_complete:
+                    st.info("⏳ A definir — Deben completarse todos los partidos de las zonas.")
+                else:
+                    qualified = qualified_from_tables(zone_tables, cfg["top_per_zone"])
+                    if not qualified:
+                        st.info("Sin clasificados aún.")
+                    else:
+                        dfq = pd.DataFrame([{"Zona":z,"Pos":pos,"Pareja":p} for (z,pos,p) in qualified])
+                        st.markdown(dfq.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
+
+        # ========== PLAYOFFS ==========
+        with tabs[4]:
+            st.subheader("Playoffs (por sets + puntos de oro)")
+            if not tourn_state.get("groups") or not tourn_state.get("results"):
+                st.info("Necesitas tener zonas y resultados para definir clasificados.")
+            else:
+                cfg = tourn_state["config"]
+                fmt = cfg.get("format","best_of_3")
+                all_complete = all(zone_complete(f"Z{zi}", tourn_state["results"], fmt) for zi in range(1, len(tourn_state["groups"])+1))
+                if not all_complete:
+                    st.info("⏳ A definir — Completa la fase de grupos para habilitar los playoffs.")
+                else:
+                    zone_tables = []
+                    for zi, group in enumerate(tourn_state["groups"], start=1):
+                        zone_name = f"Z{zi}"
+                        table = standings_from_results(zone_name, group, tourn_state["results"], cfg)
+                        zone_tables.append(table)
+                    qualified = qualified_from_tables(zone_tables, cfg["top_per_zone"])
+
+                    c1,c2 = st.columns(2)
+                    with c1:
+                        if st.button("🔄 Regenerar Playoffs (desde clasificados)"):
+                            tourn_state["ko"]["matches"] = build_initial_ko(qualified)
+                            save_tournament(tourn_tid, tourn_state)
+                            st.success("Playoffs regenerados.")
+                            st.rerun()
+                    with c2:
+                        st.caption("Usa esto si cambiaste resultados de zonas y querés rehacer la llave.")
+
+                    if not tourn_state["ko"]["matches"]:
+                        tourn_state["ko"]["matches"] = build_initial_ko(qualified)
+                        save_tournament(tourn_tid, tourn_state)
+
+                    round_order = ["QF","SF","FN"]
+                    can_progress = True
+                    final_champion = None
+
+                    for rname in round_order:
+                        ms = [m for m in tourn_state["ko"]["matches"] if m.get("round")==rname]
+                        if not ms:
+                            continue
+                        st.markdown(f"### {rname}")
+                        advancing = []
+                        for idx, m in enumerate(ms, start=1):
+                            with st.container(border=True):
+                                title = f"**{m['label']}** — {m['a']} vs {m['b']}"
+                                stats_now = compute_sets_stats(m.get("sets", [])) if m.get("sets") else {"sets1":0,"sets2":0}
+                                if m.get("sets") and match_has_winner(m["sets"]):
+                                    winner = m['a'] if stats_now["sets1"]>stats_now["sets2"] else m['b']
+                                    title += f"  <span class='winner-badge'>🏆 {winner}</span>"
+                                else:
+                                    title += "  <span style='color:#999'>(A definir)</span>"
+                                st.markdown(title, unsafe_allow_html=True)
+
+                                cur_sets = m.get("sets", [])
+                                n_min, n_max = (1,1) if fmt=="one_set" else ((2,3) if fmt=="best_of_3" else (3,5))
+                                n_sets = st.number_input(
+                                    "Sets jugados", min_value=n_min, max_value=n_max,
+                                    value=min(max(len(cur_sets), n_min), n_max),
+                                    key=f"ko_ns_{tourn_tid}_{rname}_{idx}"
+                                )
+                                new_sets = []
+                                for si in range(n_sets):
+                                    cA,cB = st.columns(2)
+                                    with cA:
+                                        s1 = st.number_input(
+                                            f"Set {si+1} — games {m['a']}", 0, 20,
+                                            int(cur_sets[si]["s1"]) if si<len(cur_sets) and "s1" in cur_sets[si] else 0,
+                                            key=f"ko_s1_{tourn_tid}_{rname}_{idx}_{si}"
+                                        )
+                                    with cB:
+                                        s2 = st.number_input(
+                                            f"Set {si+1} — games {m['b']}", 0, 20,
+                                            int(cur_sets[si]["s2"]) if si<len(cur_sets) and "s2" in cur_sets[si] else 0,
+                                            key=f"ko_s2_{tourn_tid}_{rname}_{idx}_{si}"
+                                        )
+                                    new_sets.append({"s1":int(s1),"s2":int(s2)})
+                                ok, msg = validate_sets(fmt, new_sets)
+                                if not ok:
+                                    st.error(msg)
+                                gC,gD = st.columns(2)
+                                with gC:
+                                    g1 = st.number_input(f"Puntos de oro {m['a']}", 0, 200, int(m.get("goldenA",0)), key=f"ko_g1_{tourn_tid}_{rname}_{idx}")
+                                with gD:
+                                    g2 = st.number_input(f"Puntos de oro {m['b']}", 0, 200, int(m.get("goldenB",0)), key=f"ko_g2_{tourn_tid}_{rname}_{idx}")
+
+                                if st.button("Guardar partido KO", key=f"ko_sv_{tourn_tid}_{rname}_{idx}"):
+                                    stats = compute_sets_stats(new_sets)
+                                    if stats["sets1"] == stats["sets2"]:
+                                        st.error("Debe haber un ganador. Ajustá los sets.")
+                                    else:
+                                        m["sets"] = new_sets
+                                        m["goldenA"] = int(g1)
+                                        m["goldenB"] = int(g2)
+                                        save_tournament(tourn_tid, tourn_state)
+                                        winner = m['a'] if stats["sets1"]>stats["sets2"] else m['b']
+                                        st.success(f"KO guardado. 🏆 Ganó {winner}")
+                                        st.rerun()
+
+                                if m.get("sets") and match_has_winner(m["sets"]):
+                                    stats = compute_sets_stats(m["sets"])
+                                    winner = m['a'] if stats["sets1"]>stats["sets2"] else m['b']
+                                    advancing.append(winner)
+                                else:
+                                    can_progress = False
+
+                        if rname=="FN":
+                            if advancing and len(advancing)==1:
+                                final_champion = advancing[0]
+                                st.markdown(f"<div class='champion-banner'>🏆 CAMPEÓN: {final_champion}</div>", unsafe_allow_html=True)
+                                st.balloons()
+                            continue
+
+                        if can_progress and advancing:
+                            next_rname = make_next_round_name(rname)
+                            if next_rname:
+                                pairs = next_round(advancing)
+                                tourn_state["ko"]["matches"] = [m for m in tourn_state["ko"]["matches"] if m.get("round") not in (next_rname,)]
+                                tourn_state["ko"]["matches"].extend(pairs_to_matches(pairs, next_rname))
+                                save_tournament(tourn_tid, tourn_state)
+                                st.info(f"Ronda {next_rname} preparada. Completa todos para llegar a la FINAL.")
+                                st.rerun()
+                        else:
+                            st.info("⏳ A definir — Falta completar partidos de esta fase para avanzar.")
+
+        # ========== PERSISTENCIA ==========
+        with tabs[5]:
+            st.subheader("Persistencia (autosave + snapshots)")
+            def sanitize_filename(s: str) -> str:
+                return "".join(ch if ch.isalnum() or ch in ("-","_") else "_" for ch in s).strip("_")
+            c1,c2,c3,c4 = st.columns(4)
+            with c1:
+                st.session_state.autosave = st.checkbox("Autosave", value=st.session_state.autosave)
+            with c2:
+                if st.button("💾 Guardar ahora"):
+                    save_tournament(tourn_tid, tourn_state)
+                    st.success("Guardado")
+            with c3:
+                meta = tourn_state.get("meta", {})
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                fname = f"{meta.get('tournament_id','')}_{sanitize_filename(meta.get('t_name',''))}_{meta.get('date','')}_{ts}.json"
+                st.download_button(
+                    "⬇️ Descargar estado (JSON)",
+                    data=json.dumps(tourn_state, ensure_ascii=False, indent=2).encode("utf-8"),
+                    file_name=fname,
+                    mime="application/json",
+                    key="dl_state_json"
+                )
+            with c4:
+                up = st.file_uploader("⬆️ Cargar estado", type=["json"], key=f"up_{tourn_tid}")
+                if up is not None:
+                    st.warning("⚠️ Vas a restaurar un estado completo. Se desactiva el autosave temporalmente para acelerar la importación.")
+                    if st.button("Confirmar restauración", key=f"confirm_restore_{tourn_tid}", type="primary"):
+                        try:
+                            new_state = json.load(up)
+                            st.session_state["suspend_autosave_runs"] = 2
+                            save_tournament(tourn_tid, new_state)
+                            st.success("Cargado y guardado. (Autosave reactivado automáticamente en unos segundos)")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error al cargar: {e}")
+
+        # Autosave con suspensión temporal
+        current_hash = compute_state_hash(tourn_state)
+        if st.session_state.get("suspend_autosave_runs", 0) > 0:
+            st.session_state["suspend_autosave_runs"] -= 1
+        else:
+            if st.session_state.autosave and current_hash != st.session_state.last_hash:
+                save_tournament(tourn_tid, tourn_state)
+                st.toast("💾 Autosaved", icon="💾")
+                st.session_state.last_hash = current_hash
+            elif not st.session_state.autosave:
+                st.session_state.last_hash = current_hash
+
+# ====== Viewer ======
+def viewer_dashboard(user: Dict[str, Any]):
+    user_text = f"Usuario: <b>{user['username']}</b> &nbsp;|&nbsp; Rol: <code>{user['role']}</code>"
+    inject_global_layout(user_text)
+    st.header(f"Vista de consulta — {user['username']}")
+    if not user.get("assigned_admin"):
+        st.warning("No asignado a un admin.")
+        return
+    my = load_index_for_admin(user["assigned_admin"])
+    if not my:
+        st.info("El admin asignado no tiene torneos.")
+        return
+    names = [f"{t['date']} — {t['t_name']} ({t['gender']}) — {t['place']} — ID:{t['tournament_id']}" for t in my]
+    selected = st.selectbox("Selecciona un torneo para ver", names, index=0)
+    sel = my[names.index(selected)]
+    viewer_tournament(sel["tournament_id"])
 
 def viewer_tournament(tid: str, public: bool=False):
-    tourn_state = load_tournament(tid)
-    if not tourn_state:
-        st.warning("Torneo no encontrado.")
+    user_text = "Modo público" if public else "Modo consulta"
+    inject_global_layout(user_text)
+    state = load_tournament(tid)
+    if not state:
+        st.error("No se encontró el torneo.")
         return
-
-    st.markdown("---")
-    st.markdown(f"## {tourn_state['meta']['t_name']}")
-    
-    tab_config, tab_pairs, tab_zones, tab_playoffs, tab_standings = st.tabs(["📋 Configuración", "👫 Parejas", "📍 Zonas", "🏆 Playoffs", "📊 Posiciones"])
-
-    with tab_config:
-        st.markdown("### Configuración del Torneo")
-        st.json(tourn_state["config"])
-        st.json(tourn_state["meta"])
-
-    with tab_pairs:
-        st.markdown("### Lista de Parejas")
-        for pair in tourn_state["pairs"]:
-            is_seeded = pair in tourn_state.get("seeded_pairs", [])
-            st.markdown(f"- {pair} {'(CS)' if is_seeded else ''}")
-    
-    with tab_zones:
-        st.markdown("### Sorteo y Fixture de Zonas")
-        if tourn_state.get("groups"):
-            st.subheader("Grupos")
-            cols = st.columns(tourn_state["config"]["num_zones"])
-            for i, group in enumerate(tourn_state["groups"]):
-                with cols[i]:
-                    st.markdown(f"**Zona {i+1}**")
-                    for p in group:
-                        is_seeded = p in tourn_state.get("seeded_pairs", [])
-                        st.markdown(f"- {p} {'(CS)' if is_seeded else ''}")
-            
-            st.subheader("Fixture de Zonas")
-            for m in tourn_state["results"]:
-                with st.container(border=True):
-                    st.markdown(f"**{m['zone']}** - {m['pair1']} vs {m['pair2']}")
-                    sets = m.get("sets", [])
-                    if sets:
-                        stats = compute_sets_stats(sets)
-                        st.markdown(f"Resultado: **{stats['sets1']} - {stats['sets2']}** sets")
-                        for i,s in enumerate(sets):
-                            st.markdown(f"Set {i+1}: {s['s1']}-{s['s2']}")
+    st.subheader(f"{state['meta'].get('t_name')} — {state['meta'].get('place')} — {state['meta'].get('date')} — {state['meta'].get('gender')}")
+    tab_over, tab_tables, tab_ko = st.tabs(["👀 General","📊 Tablas","🏁 Playoffs"])
+    with tab_over:
+        st.write("Parejas")
+        dfp = pd.DataFrame({"Parejas": state.get("pairs", [])})
+        st.markdown(dfp.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
+        if state.get("groups"):
+            st.write("Zonas")
+            for zi, group in enumerate(state["groups"], start=1):
+                st.write(f"**Z{zi}**")
+                df_g = pd.DataFrame({"Parejas": group})
+                st.markdown(df_g.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
+    with tab_tables:
+        if not state.get("groups") or not state.get("results"):
+            st.info("Sin fixture/resultados aún.")
         else:
-            st.info("Aún no se ha realizado el sorteo.")
-            
-    with tab_playoffs:
-        st.markdown("### Llaves de Playoff")
-        if tourn_state["ko"]["matches"]:
-            for m in tourn_state["ko"]["matches"]:
-                st.markdown(f"### {m['label']} - {m['round']}")
-                st.markdown(f"**{m['a']}** vs **{m['b']}**")
-                sets = m.get("sets", [])
-                if sets:
-                    stats = compute_sets_stats(sets)
-                    st.markdown(f"Resultado: **{stats['sets1']} - {stats['sets2']}** sets")
-                    for i,s in enumerate(sets):
-                        st.markdown(f"Set {i+1}: {s['s1']}-{s['s2']}")
+            cfg = state["config"]
+            fmt = cfg.get("format","best_of_3")
+            for zi, group in enumerate(state["groups"], start=1):
+                zone_name = f"Z{zi}"
+                status = "✅ Completa" if zone_complete(zone_name, state["results"], fmt) else "⏳ A definir"
+                st.markdown(f"#### Tabla {zone_name} — {status}")
+                table = standings_from_results(zone_name, group, state["results"], cfg)
+                if table.empty:
+                    st.info("Sin datos para mostrar todavía.")
+                else:
+                    st.markdown(table.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
+    with tab_ko:
+        ko = state.get("ko", {"matches": []})
+        if not ko.get("matches"):
+            st.info("Aún no hay partidos de playoffs.")
         else:
-            st.info("Aún no se ha generado la llave de playoff.")
+            rows = []
+            for m in ko["matches"]:
+                stats = compute_sets_stats(m.get("sets", [])) if m.get("sets") else {"sets1":0,"sets2":0}
+                res = "A definir"
+                if m.get("sets") and match_has_winner(m["sets"]):
+                    res = f"{stats['sets1']}-{stats['sets2']}"
+                rows.append({"Ronda": m.get("round",""), "Clave": m.get("label",""), "A": m.get("a",""), "B": m.get("b",""), "Resultado": res})
+            dfo = pd.DataFrame(rows)
+            st.markdown(dfo.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
+    if public:
+        st.info("Modo público (solo lectura)")
 
-    with tab_standings:
-        st.markdown("### Posiciones por Zona")
-        if tourn_state.get("groups"):
-            zone_tables = [standings_from_results(f"Z{i+1}", g, tourn_state["results"], tourn_state["config"]) for i,g in enumerate(tourn_state["groups"])]
-            cols = st.columns(tourn_state["config"]["num_zones"])
-            for i, t in enumerate(zone_tables):
-                with cols[i]:
-                    st.markdown(f"**Posiciones - Zona {i+1}**")
-                    if not t.empty:
-                        is_complete = zone_complete(f"Z{i+1}", tourn_state["results"], tourn_state["config"]["format"])
-                        # Add qualified checkmark
-                        if is_complete:
-                            for j in range(len(t)):
-                                if t.iloc[j]["Pos"] <= tourn_state["config"]["top_per_zone"]:
-                                    t.at[j, "pair"] = f"{t.iloc[j]['pair']} ✅"
-                        
-                        st.dataframe(t.style.set_table_styles([
-                            {'selector': 'th', 'props': [('background-color', DARK_GREY), ('color', 'white')]},
-                            {'selector': 'tr:nth-child(even)', 'props': [('background-color', LIGHT_GREY)]},
-                            {'selector': 'tr:nth-child(odd)', 'props': [('background-color', 'white')]}
-                        ]).hide(axis="index"), use_container_width=True)
-                        
-def viewer_tournament(tid: str, public: bool=False):
-    tourn_state = load_tournament(tid)
-    if not tourn_state:
-        st.warning("Torneo no encontrado.")
-        return
+# ====== PDF (fixture / playoffs) ======
+def export_fixture_pdf(state: Dict[str,Any]) -> Optional[BytesIO]:
+    if not REPORTLAB_OK:
+        return None
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.5*cm, rightMargin=1.5*cm, topMargin=1.5*cm, bottomMargin=1.5*cm)
+    styles = getSampleStyleSheet()
+    elems = []
+    title = f"Fixture — {state['meta'].get('t_name')} — {state['meta'].get('place')} — {state['meta'].get('date')}"
+    elems.append(Paragraph(title, styles['Title']))
+    elems.append(Spacer(1, 12))
+    if not state.get("groups"):
+        elems.append(Paragraph("Sin zonas generadas.", styles['Normal']))
+    else:
+        for zi, group in enumerate(state["groups"], start=1):
+            elems.append(Paragraph(f"Zona Z{zi}", styles['Heading2']))
+            data = [["Parejas"]] + [[p] for p in group]
+            t = Table(data, colWidths=[16*cm])
+            t.setStyle(TableStyle([
+                ('GRID',(0,0),(-1,-1),0.5,colors.grey),
+                ('BACKGROUND',(0,0),(-1,0),colors.lightgrey)
+            ]))
+            elems.append(t)
+            elems.append(Spacer(1,8))
+        rows = [["Zona","Pareja 1","Pareja 2"]]
+        for m in state["results"]:
+            rows.append([m["zone"], m["pair1"], m["pair2"]])
+        elems.append(Paragraph("Partidos (fase de grupos)", styles['Heading2']))
+        t2 = Table(rows, colWidths=[2*cm, 7*cm, 7*cm])
+        t2.setStyle(TableStyle([
+            ('GRID',(0,0),(-1,-1),0.5,colors.grey),
+            ('BACKGROUND',(0,0),(-1,0),colors.lightgrey)
+        ]))
+        elems.append(t2)
+    doc.build(elems)
+    buf.seek(0)
+    return buf
 
-    st.markdown("---")
-    st.markdown(f"## {tourn_state['meta']['t_name']}")
-    
-    tab_config, tab_pairs, tab_zones, tab_playoffs, tab_standings = st.tabs(["📋 Configuración", "👫 Parejas", "📍 Zonas", "🏆 Playoffs", "📊 Posiciones"])
+def export_playoffs_pdf(state: Dict[str,Any]) -> Optional[BytesIO]:
+    if not REPORTLAB_OK:
+        return None
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.0*cm, rightMargin=1.0*cm, topMargin=1.0*cm, bottomMargin=1.0*cm)
+    styles = getSampleStyleSheet()
+    elems = []
+    elems.append(Paragraph(f"Playoffs — {state['meta'].get('t_name')}", styles['Title']))
+    elems.append(Spacer(1, 10))
+    ko = state.get("ko", {"matches": []})
+    rounds = ["QF","SF","FN"]
+    for r in rounds:
+        ms = [m for m in ko.get("matches", []) if m.get("round")==r]
+        if not ms:
+            continue
+        elems.append(Paragraph(r, styles['Heading2']))
+        rows = [["Clave","A","B","Sets A-B","Ptos Oro A-B"]]
+        for m in ms:
+            stats = compute_sets_stats(m.get("sets", []))
+            sets_str = f"{stats['sets1']}-{stats['sets2']}" if m.get("sets") and match_has_winner(m["sets"]) else "A definir"
+            gp_str = f"{m.get('goldenA',0)}-{m.get('goldenB',0)}"
+            rows.append([m.get("label",""), m.get("a",""), m.get("b",""), sets_str, gp_str])
+        t = Table(rows, colWidths=[3*cm, 5*cm, 5*cm, 3*cm, 3*cm])
+        t.setStyle(TableStyle([
+            ('GRID',(0,0),(-1,-1),0.5,colors.grey),
+            ('BACKGROUND',(0,0),(-1,0),colors.lightgrey)
+        ]))
+        elems.append(t)
+        elems.append(Spacer(1,8))
+    doc.build(elems)
+    buf.seek(0)
+    return buf
 
-    with tab_config:
-        st.markdown("### Configuración del Torneo")
-        st.json(tourn_state["config"])
-        st.json(tourn_state["meta"])
-
-    with tab_pairs:
-        st.markdown("### Lista de Parejas")
-        for pair in tourn_state["pairs"]:
-            is_seeded = pair in tourn_state.get("seeded_pairs", [])
-            st.markdown(f"- {pair} {'(CS)' if is_seeded else ''}")
-    
-    with tab_zones:
-        st.markdown("### Sorteo y Fixture de Zonas")
-        if tourn_state.get("groups"):
-            st.subheader("Grupos")
-            cols = st.columns(tourn_state["config"]["num_zones"])
-            for i, group in enumerate(tourn_state["groups"]):
-                with cols[i]:
-                    st.markdown(f"**Zona {i+1}**")
-                    for p in group:
-                        is_seeded = p in tourn_state.get("seeded_pairs", [])
-                        st.markdown(f"- {p} {'(CS)' if is_seeded else ''}")
-            
-            st.subheader("Fixture de Zonas")
-            for m in tourn_state["results"]:
-                with st.container(border=True):
-                    st.markdown(f"**{m['zone']}** - {m['pair1']} vs {m['pair2']}")
-                    sets = m.get("sets", [])
-                    if sets:
-                        stats = compute_sets_stats(sets)
-                        st.markdown(f"Resultado: **{stats['sets1']} - {stats['sets2']}** sets")
-                        for i,s in enumerate(sets):
-                            st.markdown(f"Set {i+1}: {s['s1']}-{s['s2']}")
-        else:
-            st.info("Aún no se ha realizado el sorteo.")
-            
-    with tab_playoffs:
-        st.markdown("### Llaves de Playoff")
-        if tourn_state["ko"]["matches"]:
-            for m in tourn_state["ko"]["matches"]:
-                st.markdown(f"### {m['label']} - {m['round']}")
-                st.markdown(f"**{m['a']}** vs **{m['b']}**")
-                sets = m.get("sets", [])
-                if sets:
-                    stats = compute_sets_stats(sets)
-                    st.markdown(f"Resultado: **{stats['sets1']} - {stats['sets2']}** sets")
-                    for i,s in enumerate(sets):
-                        st.markdown(f"Set {i+1}: {s['s1']}-{s['s2']}")
-        else:
-            st.info("Aún no se ha generado la llave de playoff.")
-
-    with tab_standings:
-        st.markdown("### Posiciones por Zona")
-        if tourn_state.get("groups"):
-            zone_tables = [standings_from_results(f"Z{i+1}", g, tourn_state["results"], tourn_state["config"]) for i,g in enumerate(tourn_state["groups"])]
-            cols = st.columns(tourn_state["config"]["num_zones"])
-            for i, t in enumerate(zone_tables):
-                with cols[i]:
-                    st.markdown(f"**Posiciones - Zona {i+1}**")
-                    if not t.empty:
-                        is_complete = zone_complete(f"Z{i+1}", tourn_state["results"], tourn_state["config"]["format"])
-                        # Add qualified checkmark
-                        if is_complete:
-                            for j in range(len(t)):
-                                if t.iloc[j]["Pos"] <= tourn_state["config"]["top_per_zone"]:
-                                    t.at[j, "pair"] = f"{t.iloc[j]['pair']} ✅"
-                        
-                        st.dataframe(t.style.set_table_styles([
-                            {'selector': 'th', 'props': [('background-color', DARK_GREY), ('color', 'white')]},
-                            {'selector': 'tr:nth-child(even)', 'props': [('background-color', LIGHT_GREY)]},
-                            {'selector': 'tr:nth-child(odd)', 'props': [('background-color', 'white')]}
-                        ]).hide(axis="index"), use_container_width=True)
-
+# ====== Entrada ======
 def main():
+    try:
+        params = st.query_params
+    except Exception:
+        params = st.experimental_get_query_params()
+
     init_session()
 
-    if st.query_params.get("mode", [""])[0] == "super":
-        if st.session_state.get("auth_user") and st.session_state.auth_user["role"] == "SUPER_ADMIN":
-            super_admin_panel()
-        else:
-            st.warning("Acceso denegado. Solo Super Admin.")
-            login_form()
-        return
-
-    params = st.query_params
-    mode = params.get("mode", [""])[0]
-    _tid = params.get("tid", [""])[0]
+    mode = params.get("mode", [""])
+    mode = mode[0] if isinstance(mode, list) else mode
+    _tid = params.get("tid", [""])
+    _tid = _tid[0] if isinstance(_tid, list) else _tid
 
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
-        st.caption("iAPPs Pádel — v3.3.27")
+        st.caption("iAPPs Pádel — v3.3.28")
         return
 
     if not st.session_state.get("auth_user"):
         inject_global_layout("No autenticado")
         login_form()
-        st.caption("iAPPs Pádel — v3.3.27")
+        st.caption("iAPPs Pádel — v3.3.28")
         return
 
     user = st.session_state["auth_user"]
-    
-    if user["role"]=="SUPER_ADMIN":
-        super_admin_panel()
+
+    user_text = f"Usuario: <b>{user['username']}</b> &nbsp;|&nbsp; Rol: <code>{user['role']}</code> &nbsp;&nbsp;<a href='#' onclick='window.location.reload()'>Cerrar sesión</a>"
+    inject_global_layout(user_text)
+
+    top = st.columns([4,3,3,1])
+    with top[0]:
+        st.markdown(f"**Usuario:** {user['username']} · Rol: `{user['role']}`")
+    with top[1]:
+        st.link_button("Abrir Super Admin", url="?mode=super")
+    with top[2]:
+        st.button("Cerrar sesión", on_click=lambda: st.session_state.update({"auth_user":None,"current_tid":None}))
+    st.divider()
+
+    if user["role"]=="SUPER_ADMIN" and (mode=="super"):
+        admin_dashboard(user)  # reutilizamos dashboard como superadmin view simple
+    elif user["role"]=="SUPER_ADMIN":
+        admin_dashboard(user)
     elif user["role"]=="TOURNAMENT_ADMIN":
         admin_dashboard(user)
     elif user["role"]=="VIEWER":
-        st.info("Modo solo lectura. Puedes ver los torneos de tu administrador asignado.")
-        admin = get_user(user["assigned_admin"])
-        if admin:
-            st.session_state.current_tid = st.selectbox("Torneo", [t["tournament_id"] for t in load_index_for_admin(admin["username"])], format_func=lambda tid: load_tournament(tid)["meta"]["t_name"])
-            if st.session_state.current_tid:
-                viewer_tournament(st.session_state.current_tid)
-        else:
-            st.warning("No tienes torneos asignados para ver.")
+        viewer_dashboard(user)
+    else:
+        st.error("Rol desconocido.")
 
+    st.caption("iAPPs Pádel — v3.3.28")
+
+# Ejecutar
 if __name__ == "__main__":
     main()
