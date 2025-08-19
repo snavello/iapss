@@ -1,8 +1,10 @@
-# app.py — v3.3.26
+# app.py — v3.3.27
 # - Fix `StreamlitInvalidFormCallbackError` by moving the "copy link" button outside the form.
 # - This also resolves the "Missing Submit Button" warning related to the same form.
 # - Restore "Persistencia" tab with all its content and functionality.
 # - Reworked public URL logic to be more robust.
+# - Fix `Streamlit` bug where pair names were not being detected in the form by
+#   correctly resetting session state after a successful submission.
 
 import streamlit as st
 import pandas as pd
@@ -29,7 +31,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — v3.3.26", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — v3.3.27", layout="wide")
 
 # ====== Estilos / colores ======
 PRIMARY_BLUE = "#0D47A1"
@@ -843,8 +845,6 @@ def admin_dashboard(admin_user: Dict[str, Any]):
             
             with form_col:
                 with st.form("add_pair"):
-                    if st.session_state.get("j1_input"): st.session_state["j1_input"] = ""
-                    if st.session_state.get("j2_input"): st.session_state["j2_input"] = ""
                     j1 = st.text_input("Jugador 1", key="j1_input").strip()
                     j2 = st.text_input("Jugador 2", key="j2_input").strip()
                     submitted = st.form_submit_button("Agregar pareja", type="primary")
@@ -860,6 +860,8 @@ def admin_dashboard(admin_user: Dict[str, Any]):
                                 tourn_state["pairs"] = sorted(tourn_state["pairs"])
                                 save_tournament(tourn_tid, tourn_state)
                                 st.success(f"Pareja '{j1} / {j2}' agregada.")
+                                st.session_state["j1_input"] = ""
+                                st.session_state["j2_input"] = ""
                                 st.rerun()
                             else:
                                 st.error("Ya has alcanzado el número máximo de parejas configurado.")
@@ -1150,6 +1152,90 @@ def viewer_tournament(tid: str, public: bool=False):
                             {'selector': 'tr:nth-child(odd)', 'props': [('background-color', 'white')]}
                         ]).hide(axis="index"), use_container_width=True)
                         
+def viewer_tournament(tid: str, public: bool=False):
+    tourn_state = load_tournament(tid)
+    if not tourn_state:
+        st.warning("Torneo no encontrado.")
+        return
+
+    st.markdown("---")
+    st.markdown(f"## {tourn_state['meta']['t_name']}")
+    
+    tab_config, tab_pairs, tab_zones, tab_playoffs, tab_standings = st.tabs(["📋 Configuración", "👫 Parejas", "📍 Zonas", "🏆 Playoffs", "📊 Posiciones"])
+
+    with tab_config:
+        st.markdown("### Configuración del Torneo")
+        st.json(tourn_state["config"])
+        st.json(tourn_state["meta"])
+
+    with tab_pairs:
+        st.markdown("### Lista de Parejas")
+        for pair in tourn_state["pairs"]:
+            is_seeded = pair in tourn_state.get("seeded_pairs", [])
+            st.markdown(f"- {pair} {'(CS)' if is_seeded else ''}")
+    
+    with tab_zones:
+        st.markdown("### Sorteo y Fixture de Zonas")
+        if tourn_state.get("groups"):
+            st.subheader("Grupos")
+            cols = st.columns(tourn_state["config"]["num_zones"])
+            for i, group in enumerate(tourn_state["groups"]):
+                with cols[i]:
+                    st.markdown(f"**Zona {i+1}**")
+                    for p in group:
+                        is_seeded = p in tourn_state.get("seeded_pairs", [])
+                        st.markdown(f"- {p} {'(CS)' if is_seeded else ''}")
+            
+            st.subheader("Fixture de Zonas")
+            for m in tourn_state["results"]:
+                with st.container(border=True):
+                    st.markdown(f"**{m['zone']}** - {m['pair1']} vs {m['pair2']}")
+                    sets = m.get("sets", [])
+                    if sets:
+                        stats = compute_sets_stats(sets)
+                        st.markdown(f"Resultado: **{stats['sets1']} - {stats['sets2']}** sets")
+                        for i,s in enumerate(sets):
+                            st.markdown(f"Set {i+1}: {s['s1']}-{s['s2']}")
+        else:
+            st.info("Aún no se ha realizado el sorteo.")
+            
+    with tab_playoffs:
+        st.markdown("### Llaves de Playoff")
+        if tourn_state["ko"]["matches"]:
+            for m in tourn_state["ko"]["matches"]:
+                st.markdown(f"### {m['label']} - {m['round']}")
+                st.markdown(f"**{m['a']}** vs **{m['b']}**")
+                sets = m.get("sets", [])
+                if sets:
+                    stats = compute_sets_stats(sets)
+                    st.markdown(f"Resultado: **{stats['sets1']} - {stats['sets2']}** sets")
+                    for i,s in enumerate(sets):
+                        st.markdown(f"Set {i+1}: {s['s1']}-{s['s2']}")
+        else:
+            st.info("Aún no se ha generado la llave de playoff.")
+
+    with tab_standings:
+        st.markdown("### Posiciones por Zona")
+        if tourn_state.get("groups"):
+            zone_tables = [standings_from_results(f"Z{i+1}", g, tourn_state["results"], tourn_state["config"]) for i,g in enumerate(tourn_state["groups"])]
+            cols = st.columns(tourn_state["config"]["num_zones"])
+            for i, t in enumerate(zone_tables):
+                with cols[i]:
+                    st.markdown(f"**Posiciones - Zona {i+1}**")
+                    if not t.empty:
+                        is_complete = zone_complete(f"Z{i+1}", tourn_state["results"], tourn_state["config"]["format"])
+                        # Add qualified checkmark
+                        if is_complete:
+                            for j in range(len(t)):
+                                if t.iloc[j]["Pos"] <= tourn_state["config"]["top_per_zone"]:
+                                    t.at[j, "pair"] = f"{t.iloc[j]['pair']} ✅"
+                        
+                        st.dataframe(t.style.set_table_styles([
+                            {'selector': 'th', 'props': [('background-color', DARK_GREY), ('color', 'white')]},
+                            {'selector': 'tr:nth-child(even)', 'props': [('background-color', LIGHT_GREY)]},
+                            {'selector': 'tr:nth-child(odd)', 'props': [('background-color', 'white')]}
+                        ]).hide(axis="index"), use_container_width=True)
+
 def main():
     init_session()
 
@@ -1167,13 +1253,13 @@ def main():
 
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
-        st.caption("iAPPs Pádel — v3.3.26")
+        st.caption("iAPPs Pádel — v3.3.27")
         return
 
     if not st.session_state.get("auth_user"):
         inject_global_layout("No autenticado")
         login_form()
-        st.caption("iAPPs Pádel — v3.3.26")
+        st.caption("iAPPs Pádel — v3.3.27")
         return
 
     user = st.session_state["auth_user"]
