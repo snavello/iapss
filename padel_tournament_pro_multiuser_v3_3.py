@@ -1,10 +1,7 @@
-# app.py — v3.3.24
-# - Exponer link publico completo + icono copiar al portapapeles.
-# - Agregar checkbox 'Usar cabezas de serie'.
-# - Sistema de cabezas de serie con 1 por zona.
-# - Administracion de parejas: form a la izq, lista a la der, icono de basura para eliminar.
-# - Tablas: encabezados en gris, alternancia de colores, icono de check para los clasificados.
-# - Corregido el estilo del texto 'TOURNAMENTS'.
+# app.py — v3.3.25
+# - Fix `AttributeError` from public link generation in admin dashboard.
+# - Restore "Persistencia" tab with all its content and functionality.
+# - Reworked public URL logic to be more robust.
 
 import streamlit as st
 import pandas as pd
@@ -31,7 +28,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — v3.3.24", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — v3.3.25", layout="wide")
 
 # ====== Estilos / colores ======
 PRIMARY_BLUE = "#0D47A1"
@@ -519,6 +516,7 @@ def init_session():
     st.session_state.setdefault("suspend_autosave_runs", 0)
     st.session_state.setdefault("j1_input", "")
     st.session_state.setdefault("j2_input", "")
+    st.session_state.setdefault("restore_file_upload_key", 0)
 
 def compute_state_hash(state: Dict[str,Any]) -> str:
     return hashlib.sha256(json.dumps(state, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
@@ -774,7 +772,7 @@ def admin_dashboard(admin_user: Dict[str, Any]):
                         st.error(f"Error al eliminar: {e}")
 
         # TABS
-        tab_config, tab_pairs, tab_zones, tab_playoffs, tab_standings = st.tabs(["📋 Configuración", "👫 Parejas", "📍 Zonas", "🏆 Playoffs", "📊 Posiciones"])
+        tab_config, tab_pairs, tab_zones, tab_playoffs, tab_standings, tab_persist = st.tabs(["📋 Configuración", "👫 Parejas", "📍 Zonas", "🏆 Playoffs", "📊 Posiciones", "💾 Persistencia"])
 
         with tab_config:
             st.markdown("### Configuración")
@@ -785,7 +783,9 @@ def admin_dashboard(admin_user: Dict[str, Any]):
                 with c_name:
                     tourn_state["meta"]["t_name"] = st.text_input("Nombre del torneo", value=tourn_state["meta"]["t_name"], key="c_name")
                 with c_url:
-                    public_url = f"{urlunparse(urlparse(st.experimental_get_query_params.get('__query_params__'))[0:3] + (f'mode=public&tid={tourn_tid}', '', ''))}"
+                    # Fix for AttributeError
+                    base_url = "https://padel-tournament-pro-multiuser.streamlit.app"
+                    public_url = f"{base_url}/?mode=public&tid={tourn_tid}"
                     st.text_input("Link público", value=public_url, key="public_link", disabled=True)
                     st.button("📋 Icono de copiar", on_click=lambda: st.components.v1.html(f"""
                         <script>
@@ -1010,6 +1010,59 @@ def admin_dashboard(admin_user: Dict[str, Any]):
                                 {'selector': 'tr:nth-child(odd)', 'props': [('background-color', 'white')]}
                             ]).hide(axis="index"), use_container_width=True)
 
+        with tab_persist:
+            st.markdown("### Persistencia y Respaldo")
+            
+            # Subir archivo JSON
+            st.markdown("#### ⬆️ Cargar desde archivo")
+            uploaded_file = st.file_uploader("Sube un archivo .json", type=["json"], key=st.session_state.restore_file_upload_key)
+            if uploaded_file:
+                try:
+                    loaded_data = json.load(uploaded_file)
+                    st.session_state["uploaded_tourn_data"] = loaded_data
+                    st.success("Archivo cargado. Haz clic en 'Restaurar' para aplicar los datos.")
+                    if st.button("Restaurar desde el archivo cargado"):
+                        save_tournament(tourn_tid, loaded_data, make_snapshot=False)
+                        st.success("Torneo restaurado con éxito desde el archivo.")
+                        st.session_state.restore_file_upload_key += 1
+                        st.session_state.last_hash = ""
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error al leer el archivo JSON: {e}")
+            
+            st.markdown("---")
+            
+            # Descargar JSON
+            st.markdown("#### ⬇️ Descargar estado actual")
+            tourn_json = json.dumps(tourn_state, ensure_ascii=False, indent=2)
+            st.download_button(
+                label="Descargar JSON del torneo",
+                data=tourn_json,
+                file_name=f"{t_name.replace(' ', '_')}_{tourn_tid}_{datetime.now().strftime('%Y%m%d')}.json",
+                mime="application/json"
+            )
+            
+            st.markdown("---")
+            
+            # Gestión de Snapshots
+            st.markdown("#### ⏪ Restaurar desde un 'Snapshot'")
+            snap_dir = snap_dir_for(tourn_tid)
+            snapshots = sorted([s for s in snap_dir.glob("snapshot_*.json")], reverse=True)
+            if not snapshots:
+                st.info("No hay snapshots disponibles.")
+            else:
+                snap_options = [s.name for s in snapshots]
+                selected_snap = st.selectbox("Selecciona un snapshot para restaurar", snap_options)
+                if st.button("Restaurar este snapshot", type="primary"):
+                    snap_path = snap_dir / selected_snap
+                    try:
+                        restored_data = json.loads(snap_path.read_text(encoding="utf-8"))
+                        save_tournament(tourn_tid, restored_data, make_snapshot=False)
+                        st.success(f"Torneo restaurado al estado de {selected_snap}.")
+                        st.session_state.last_hash = ""
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al restaurar el snapshot: {e}")
 
 def viewer_tournament(tid: str, public: bool=False):
     tourn_state = load_tournament(tid)
@@ -1112,13 +1165,13 @@ def main():
 
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
-        st.caption("iAPPs Pádel — v3.3.24")
+        st.caption("iAPPs Pádel — v3.3.25")
         return
 
     if not st.session_state.get("auth_user"):
         inject_global_layout("No autenticado")
         login_form()
-        st.caption("iAPPs Pádel — v3.3.24")
+        st.caption("iAPPs Pádel — v3.3.25")
         return
 
     user = st.session_state["auth_user"]
