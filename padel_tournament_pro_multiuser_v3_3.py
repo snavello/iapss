@@ -1,13 +1,10 @@
-# app.py — v3.3.22
-# - Fix logo visibility issue: removed fixed topbar and red line.
-# - Replaced st.experimental_get_query_params with st.query_params.
-# - Playoffs according to N qualifiers (2→FN; 4→SF+FN; 8→QF+SF+FN)
-# - "Regenerate Playoffs" button
-# - Champion highlighted in FINAL
-# - Warning + quick JSON restoration (autosave suspended)
-# - Fix NameError: init_app()
-# - Reworked delete_tournament for better file cleanup robustness.
-# - Reworked Playoffs/Tables logic to check for 'groups' to prevent KeyError.
+# app.py — v3.3.23
+# - Exponer link publico completo + icono copiar al portapapeles.
+# - Agregar checkbox 'Usar cabezas de serie'.
+# - Sistema de cabezas de serie con 1 por zona.
+# - Administracion de parejas: form a la izq, lista a la der, icono de basura para eliminar.
+# - Tablas: encabezados en gris, alternancia de colores, icono de check para los clasificados.
+# - Corregido el estilo del texto 'TOURNAMENTS'.
 
 import streamlit as st
 import pandas as pd
@@ -21,6 +18,7 @@ import uuid
 from typing import Dict, Any, List, Optional, Tuple
 from io import BytesIO
 import base64, requests
+from urllib.parse import urlparse, urlunparse
 
 # ====== PDF opcional ======
 try:
@@ -33,7 +31,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — v3.3.22", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — v3.3.23", layout="wide")
 
 # ====== Estilos / colores ======
 PRIMARY_BLUE = "#0D47A1"
@@ -166,7 +164,7 @@ def save_tournament(tid: str, obj: Dict[str, Any], make_snapshot: bool=True):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         (sd / f"snapshot_{ts}.json").write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
         snaps = sorted([x for x in sd.glob("snapshot_*.json")], reverse=True)
-        for old in snaps[KEEP_SNAPSHOTS:]:
+        for old in snaps[KEEP_SNAPSHOTs:]:
             try:
                 old.unlink()
             except Exception:
@@ -181,18 +179,39 @@ DEFAULT_CONFIG = {
     "points_win": 2,
     "points_loss": 0,
     "seed": 42,
-    "format": "best_of_3"  # one_set | best_of_3 | best_of_5
+    "format": "best_of_3",  # one_set | best_of_3 | best_of_5
+    "seeded_mode": False
 }
 
 rng = lambda off, seed: random.Random(int(seed) + int(off))
 
-def create_groups(pairs, num_groups, seed=42):
+def create_groups(pairs, num_groups, seed=42, seeded_mode=False, seeded_pairs=[]):
     r = random.Random(int(seed))
-    shuffled = pairs[:]
-    r.shuffle(shuffled)
-    groups = [[] for _ in range(num_groups)]
-    for i, p in enumerate(shuffled):
-        groups[i % num_groups].append(p)
+    
+    if seeded_mode and len(seeded_pairs) != num_groups:
+        st.error(f"Error: Debes seleccionar exactamente {num_groups} parejas como cabezas de serie.")
+        return None
+
+    if seeded_mode:
+        groups = [[] for _ in range(num_groups)]
+        # Asignar un cabeza de serie a cada grupo
+        shuffled_seeded = seeded_pairs[:]
+        r.shuffle(shuffled_seeded)
+        for i, p in enumerate(shuffled_seeded):
+            groups[i].append(p)
+        
+        # Distribuir el resto de las parejas
+        unseeded_pairs = [p for p in pairs if p not in seeded_pairs]
+        r.shuffle(unseeded_pairs)
+        for i, p in enumerate(unseeded_pairs):
+            groups[i % num_groups].append(p)
+
+    else:
+        shuffled = pairs[:]
+        r.shuffle(shuffled)
+        groups = [[] for _ in range(num_groups)]
+        for i, p in enumerate(shuffled):
+            groups[i % num_groups].append(p)
     return groups
 
 def rr_schedule(group):
@@ -476,6 +495,11 @@ def inject_global_layout(user_info_text: str):
         padding:14px 18px; border-radius:10px; background:#fff9c4; border:1px solid #ffeb3b;
         font-size:1.1rem; font-weight:700; color:#795548; margin:8px 0;
       }}
+      table.dataframe th, table.dataframe td {{ padding: 6px 10px; }}
+      .stButton>button {{ height: 100%; }}
+      .copy-btn-container {{ display:flex; align-items: center; gap: 5px; }}
+      .st-emotion-cache-1r7r32t {{ margin-top: 0; }}
+      .compact-table td, .compact-table th { padding: 4px 8px; }
     </style>
     <div class="top-header-container">
       <div class="top-header-left">{logo_html}</div>
@@ -496,6 +520,8 @@ def init_session():
     st.session_state.setdefault("suspend_autosave_runs", 0)
     st.session_state.setdefault("j1_input", "")
     st.session_state.setdefault("j2_input", "")
+    st.session_state.setdefault("current_url", "")
+    st.session_state.setdefault("seeded_pairs", [])
 
 def compute_state_hash(state: Dict[str,Any]) -> str:
     return hashlib.sha256(json.dumps(state, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
@@ -515,6 +541,7 @@ def tournament_state_template(admin_username: str, meta: Dict[str, Any]) -> Dict
         },
         "config": cfg,
         "pairs": [],
+        "seeded_pairs": [],
         "groups": None,
         "results": [],
         "ko": {"matches": []},
@@ -748,9 +775,28 @@ def admin_dashboard(user: Dict[str, Any]):
                 st.rerun()
         with c3:
             tid = sel["tournament_id"]
+            public_url = urlunparse(urlparse(st.session_state.current_url)._replace(query=f"mode=public&tid={tid}"))
+            
+            st.markdown("---")
             st.caption("Link público (solo lectura):")
-            st.code(f"?mode=public&tid={tid}")
-
+            c_url, c_copy = st.columns([0.8, 0.2])
+            with c_url:
+                st.text_input("Public Link", value=public_url, disabled=True, key=f"public_link_{tid}", label_visibility="collapsed")
+            with c_copy:
+                copy_button = st.button("📋 Copiar", key=f"copy_link_{tid}", help="Copia el enlace al portapapeles")
+                if copy_button:
+                    st.toast("¡Enlace copiado!", icon="📋")
+                    st.markdown(f"""
+                        <script>
+                        var textToCopy = document.getElementById("public_link_{tid}").value;
+                        navigator.clipboard.writeText(textToCopy).then(() => {{
+                            console.log('Text copied to clipboard');
+                        }}).catch(err => {{
+                            console.error('Failed to copy text: ', err);
+                        }});
+                        </script>
+                    """, unsafe_allow_html=True)
+            
     if st.session_state.get("current_tid"):
         tournament_manager(user, st.session_state["current_tid"])
 
@@ -778,7 +824,6 @@ def tournament_manager(user: Dict[str,Any], tid: str):
     elif st.session_state.get("suspend_autosave_runs", 0) > 0:
         st.session_state.suspend_autosave_runs -= 1
 
-
     tabs = ["Config", "Parejas", "Tablas", "Resultados", "Playoffs", "Persistencia"]
     tab_config, tab_pairs, tab_tables, tab_results, tab_ko, tab_persist = st.tabs(tabs)
 
@@ -796,8 +841,9 @@ def tournament_manager(user: Dict[str,Any], tid: str):
             with c1: points_win = st.number_input("Puntos por victoria", min_value=0, value=state["config"]["points_win"])
             with c2: points_loss = st.number_input("Puntos por derrota", min_value=0, value=state["config"]["points_loss"])
             with c3: seed = st.number_input("Seed de Sorteo", value=state["config"]["seed"])
-            with c4: # Placeholder to keep alignment
-                 st.markdown(" ")
+            with c4:
+                seeded_mode = st.checkbox("Usar cabezas de serie", value=state["config"].get("seeded_mode", False))
+                
             submitted = st.form_submit_button("Guardar configuración", type="primary")
             if submitted:
                 state["config"]["t_name"] = new_t_name
@@ -808,6 +854,7 @@ def tournament_manager(user: Dict[str,Any], tid: str):
                 state["config"]["points_win"] = int(points_win)
                 state["config"]["points_loss"] = int(points_loss)
                 state["config"]["seed"] = int(seed)
+                state["config"]["seeded_mode"] = seeded_mode
                 save_tournament(tid, state)
                 st.success("Configuración actualizada.")
                 st.rerun()
@@ -816,7 +863,7 @@ def tournament_manager(user: Dict[str,Any], tid: str):
     with tab_pairs:
         st.subheader("Administración de Parejas")
         
-        col_list, col_add = st.columns([1,2])
+        col_add, col_list = st.columns([1,2])
         
         with col_add:
             st.markdown("##### Agregar nueva pareja")
@@ -842,14 +889,28 @@ def tournament_manager(user: Dict[str,Any], tid: str):
 
         with col_list:
             st.markdown("##### Listado de Parejas")
+            if state["config"].get("seeded_mode", False):
+                st.info(f"Selecciona {state['config']['num_zones']} parejas como cabezas de serie.")
+                st.session_state.seeded_pairs = st.multiselect("Cabezas de serie", options=state["pairs"], default=state["seeded_pairs"])
+                if st.button("Guardar cabezas de serie"):
+                    if len(st.session_state.seeded_pairs) != state['config']['num_zones']:
+                        st.error(f"Debes seleccionar exactamente {state['config']['num_zones']} cabezas de serie.")
+                    else:
+                        state["seeded_pairs"] = st.session_state.seeded_pairs
+                        save_tournament(tid, state)
+                        st.success("Cabezas de serie guardados.")
+                        st.rerun()
+
             for i, p in enumerate(state["pairs"]):
                 c_pair, c_del = st.columns([4,1])
                 with c_pair:
-                    st.text_input("Pareja", p, key=f"pair_show_{i}", disabled=True)
+                    st.text_input("Pareja", p, key=f"pair_show_{i}", disabled=True, label_visibility="collapsed")
                 with c_del:
-                    if st.button("❌ Eliminar", key=f"del_pair_{i}"):
+                    if st.button("🗑️", key=f"del_pair_{i}", help="Eliminar pareja"):
                         num_to_del = parse_pair_number(p)
                         state["pairs"] = remove_pair_by_number(state["pairs"], num_to_del)
+                        if p in state["seeded_pairs"]:
+                            state["seeded_pairs"].remove(p)
                         state["pairs"].sort()
                         save_tournament(tid, state)
                         st.rerun()
@@ -860,17 +921,20 @@ def tournament_manager(user: Dict[str,Any], tid: str):
         if not state["groups"]:
             st.info("No se han generado los grupos. Ve a la pestaña 'Resultados' para generarlos.")
         else:
-            st.markdown("""<style>
-                .dataframe.dark-header th { background-color: #2f3b52 !important; color:#fff !important; }
-                .dataframe.zebra tr:nth-child(even) td { background-color: #f5f7fa !important; }
-                .dataframe.zebra tr:nth-child(odd) td  {{ background-color: #ffffff !important; }
-            </style>""", unsafe_allow_html=True)
             all_tables = [standings_from_results(f"Z{i+1}", group, state["results"], state["config"]) for i, group in enumerate(state["groups"])]
+            qualified = qualified_from_tables(all_tables, state["config"]["top_per_zone"])
+            qualified_pairs = [q[2] for q in qualified]
+            
             for table in all_tables:
                 if not table.empty:
                     st.markdown(f"**Tabla de Posiciones - {table.iloc[0]['Zona']}**")
-                    st.dataframe(table.style, hide_index=True)
-            qualified = qualified_from_tables(all_tables, state["config"]["top_per_zone"])
+                    table["Clasificado"] = table["pair"].apply(lambda p: "✔" if p in qualified_pairs else "")
+                    st.dataframe(table.style.set_table_styles([
+                        {'selector': 'thead', 'props': [('background-color', '#2f3b52'), ('color', 'white')]},
+                        {'selector': 'tr:nth-child(even)', 'props': [('background-color', '#f5f7fa')]},
+                        {'selector': 'tr:nth-child(odd)', 'props': [('background-color', 'white')]}
+                    ]), hide_index=True)
+            
             st.markdown(f"##### Clasificados a la Fase Final:")
             st.dataframe(pd.DataFrame(qualified, columns=["Zona", "Pos", "Pareja"]))
 
@@ -890,12 +954,15 @@ def tournament_manager(user: Dict[str,Any], tid: str):
                 if len(state["pairs"]) < state["config"]["num_pairs"]:
                     st.warning("No se ha alcanzado el número mínimo de parejas para el torneo. Asegúrese de que el número de parejas agregadas sea igual al número máximo de parejas para generar los grupos.")
                 else:
-                    state["groups"] = create_groups(state["pairs"], state["config"]["num_zones"], state["config"]["seed"])
-                    state["results"] = build_fixtures(state["groups"])
-                    state["ko"]["matches"] = []
-                    save_tournament(tid, state, make_snapshot=False)
-                    st.success("Grupos y fixture generados.")
-                    st.rerun()
+                    if state["config"].get("seeded_mode", False) and len(state["seeded_pairs"]) != state["config"]["num_zones"]:
+                        st.error(f"Error: Debes seleccionar exactamente {state['config']['num_zones']} parejas como cabezas de serie.")
+                    else:
+                        state["groups"] = create_groups(state["pairs"], state["config"]["num_zones"], state["config"]["seed"], state["config"].get("seeded_mode", False), state["seeded_pairs"])
+                        state["results"] = build_fixtures(state["groups"])
+                        state["ko"]["matches"] = []
+                        save_tournament(tid, state, make_snapshot=False)
+                        st.success("Grupos y fixture generados.")
+                        st.rerun()
         else:
             current_zone = st.selectbox("Selecciona una Zona", [f"Z{i+1}" for i in range(len(state["groups"]))])
             st.info("Para registrar un resultado, marca los sets ganados por cada pareja.")
@@ -1017,7 +1084,7 @@ def tournament_manager(user: Dict[str,Any], tid: str):
                                     if st.button("Guardar Resultado", key=f"save_ko_{match['label']}"):
                                         match["sets"] = new_sets
                                         match["sets"] = new_sets
-                                        save_tournament(tid, state, make_snapshot=False)
+                                        save_tournament(tid, state)
                                         st.success("Resultado de playoffs guardado.")
                                         st.rerun()
 
@@ -1081,7 +1148,6 @@ def tournament_manager(user: Dict[str,Any], tid: str):
             st.info("Autoguardado desactivado.")
 
 
-# ====== PDF Generation Functions ======
 def generate_groups_pdf(state):
     if not REPORTLAB_OK: return None
     buffer = BytesIO()
@@ -1239,6 +1305,8 @@ def viewer_tournament(tid: str, public: bool = False):
 def main():
     init_session()
     
+    st.session_state.current_url = st.query_params
+
     if st.session_state.get("pdf_fixture_bytes") is None and st.session_state.current_tid:
         state = load_tournament(st.session_state.current_tid)
         if state and state["groups"] and REPORTLAB_OK:
@@ -1265,13 +1333,13 @@ def main():
 
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
-        st.caption("iAPPs Pádel — v3.3.22")
+        st.caption("iAPPs Pádel — v3.3.23")
         return
 
     if not st.session_state.get("auth_user"):
         inject_global_layout("No autenticado")
         login_form()
-        st.caption("iAPPs Pádel — v3.3.22")
+        st.caption("iAPPs Pádel — v3.3.23")
         return
 
     user = st.session_state["auth_user"]
@@ -1289,7 +1357,6 @@ def main():
                 viewer_tournament(st.session_state.current_tid)
         else:
             st.warning("No tienes un administrador asignado o no se encontró el torneo.")
-
 
 if __name__ == "__main__":
     main()
