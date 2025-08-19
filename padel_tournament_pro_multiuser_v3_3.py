@@ -1,12 +1,11 @@
-# padel_tournament_pro_multiuser_v3_3.py — v3.3.29
-# Corrección mínima:
-# - Arregladas dos f-strings en la pestaña "Resultados" (faltaba cerrar `}"`):
-#     key=f"s1_{tourn_tid}_{idx}_{si}"
-#     key=f"s2_{tourn_tid}_{idx}_{si}"
-# - Se mantiene la corrección previa para evitar KeyError con "seeded_pairs"
-#   (setdefault) y lecturas usando .get(..., []) cuando aplica.
-#
-# No se cambia ninguna otra parte de la lógica ni del flujo de la app.
+# padel_tournament_pro_multiuser_v3_3.py — v3.3.30
+# Novedades:
+# - Configuración: checkbox "use_seeds" (cabezas de serie), default False.
+# - Parejas: marcar exactamente N seeds (N = num_zones). Se puede marcar al dar de alta o luego.
+# - Sorteo de zonas: con seeds → 1 cabeza por zona, resto al azar. Sin seeds → reparto con mínimo por zona = top_per_zone.
+# - Reparto respeta casos como 14 parejas en 4 zonas con top=2 (p.ej. 4-4-4-2).
+# - Pie: "Iapps Padel Tournament · iAPPs Pádel — v3.3.30".
+# - Correcciones previas de f-strings y defensas de estado.
 
 import streamlit as st
 import pandas as pd
@@ -32,7 +31,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="Torneo de Pádel — v3.3.29", layout="wide")
+st.set_page_config(page_title="Torneo de Pádel — v3.3.30", layout="wide")
 
 # ====== Rutas/Persistencia ======
 DATA_DIR = Path("data")
@@ -123,7 +122,7 @@ def inject_global_layout(user_info_text: str):
     app_cfg = load_app_config()
     url = (app_cfg or {}).get("app_logo_url", "").strip() or None
 
-    data_uri = fetch_image_as_data_uri(url, bust="v3_3_29") if url else ""
+    data_uri = fetch_image_as_data_uri(url, bust="v3_3_30") if url else ""
     if data_uri:
         logo_html = f'<img src="{data_uri}" alt="logo" style="display:block;max-width:20vw;max-height:64px;width:auto;height:auto;object-fit:contain;" />'
     else:
@@ -239,19 +238,11 @@ DEFAULT_CONFIG = {
     "points_win": 2,
     "points_loss": 0,
     "seed": 42,
-    "format": "best_of_3"  # one_set | best_of_3 | best_of_5
+    "format": "best_of_3",  # one_set | best_of_3 | best_of_5
+    "use_seeds": False      # NUEVO: cabezas de serie
 }
 
 rng = lambda off, seed: random.Random(int(seed) + int(off))
-
-def create_groups(pairs, num_groups, seed=42):
-    r = random.Random(int(seed))
-    shuffled = pairs[:]
-    r.shuffle(shuffled)
-    groups = [[] for _ in range(num_groups)]
-    for i, p in enumerate(shuffled):
-        groups[i % num_groups].append(p)
-    return groups
 
 def rr_schedule(group):
     return list(combinations(group, 2))
@@ -503,7 +494,7 @@ def tournament_state_template(admin_username: str, meta: Dict[str, Any]) -> Dict
         "groups": None,
         "results": [],
         "ko": {"matches": []},
-        # "seeded_pairs": []  # opcional
+        "seeded_pairs": []   # asegurar existencia
     }
 
 # ====== Utilidades parejas ======
@@ -536,10 +527,81 @@ def remove_pair_by_number(pairs: List[str], n: int) -> List[str]:
             out.append(p)
     return out
 
+# ====== Sorteo de zonas (con y sin seeds) ======
+def create_groups_seeded(pairs: List[str], num_groups: int, top_per_zone: int, seed: int, seeded_pairs: List[str]) -> List[List[str]]:
+    """
+    - seeded_pairs: exactamente num_groups parejas (o error).
+    - Coloca 1 seed por zona al azar.
+    - Reparte el resto al azar procurando:
+        * mínimo por zona = top_per_zone (si total alcanza),
+        * luego balancear lo más parejo posible.
+    """
+    r = random.Random(int(seed))
+    if len(pairs) < num_groups:
+        # el caller validará y mostrará error
+        pass
+    seeded = [p for p in pairs if p in set(seeded_pairs)]
+    if len(seeded) != num_groups:
+        raise ValueError(f"Debes marcar exactamente {num_groups} cabezas de serie (actual: {len(seeded)}).")
+
+    r.shuffle(seeded)
+    groups = [[s] for s in seeded]  # 1 seed por zona
+
+    rest = [p for p in pairs if p not in set(seeded)]
+    r.shuffle(rest)
+
+    min_per_zone = max(1, int(top_per_zone))
+    total = len(pairs)
+    desired_min_total = num_groups * min_per_zone
+
+    current_sizes = [1] * num_groups  # ya hay 1 seed
+    gi = 0
+    while rest and sum(current_sizes) < min(total, desired_min_total):
+        if current_sizes[gi] < min_per_zone:
+            groups[gi].append(rest.pop())
+            current_sizes[gi] += 1
+        gi = (gi + 1) % num_groups
+
+    gi = 0
+    while rest:
+        groups[gi].append(rest.pop())
+        current_sizes[gi] += 1
+        gi = (gi + 1) % num_groups
+
+    return groups
+
+def create_groups_unseeded(pairs: List[str], num_groups: int, top_per_zone: int, seed: int) -> List[List[str]]:
+    """
+    Sin cabezas de serie:
+    - Reparte al azar procurando mínimo por zona = top_per_zone (si total alcanza).
+    - Luego balancea lo demás de forma round-robin.
+    """
+    r = random.Random(int(seed))
+    pool = pairs[:]
+    r.shuffle(pool)
+
+    groups = [[] for _ in range(num_groups)]
+    min_per_zone = max(1, int(top_per_zone))
+    total = len(pool)
+    desired_min_total = num_groups * min_per_zone
+
+    gi = 0
+    while pool and sum(len(g) for g in groups) < min(total, desired_min_total):
+        if len(groups[gi]) < min_per_zone:
+            groups[gi].append(pool.pop())
+        gi = (gi + 1) % num_groups
+
+    gi = 0
+    while pool:
+        groups[gi].append(pool.pop())
+        gi = (gi + 1) % num_groups
+
+    return groups
+
 # ====== Login ======
 def login_form():
     st.markdown("### Ingreso — Usuario + PIN (6 dígitos)")
-    with st.form("login"):
+    with st.form("login", clear_on_submit=True):
         username = st.text_input("Usuario").strip()
         pin = st.text_input("PIN (6 dígitos)", type="password").strip()
         submitted = st.form_submit_button("Ingresar", type="primary")
@@ -618,10 +680,8 @@ def admin_dashboard(admin_user: Dict[str, Any]):
             st.rerun()
 
     with col_new:
-        if st.session_state.current_tid == "" and st.session_state.get("new_tourn_name"):
-            st.session_state["new_tourn_name"] = ""
-        with st.form("new_tourn_form"):
-            t_name = st.text_input("Nombre del nuevo torneo", key="new_tourn_name").strip()
+        with st.form("new_tourn_form", clear_on_submit=True):
+            t_name = st.text_input("Nombre del nuevo torneo").strip()
             t_id_suf = st.text_input("Identificador URL (opcional)", help="Si no lo pones, se generará uno aleatorio.").strip()
             date_col, place_col = st.columns([1,2])
             with date_col:
@@ -639,8 +699,7 @@ def admin_dashboard(admin_user: Dict[str, Any]):
     if st.session_state.current_tid:
         tourn_tid = st.session_state.current_tid
         tourn_state = load_tournament(tourn_tid)
-        # Asegurar clave compatibilidad:
-        tourn_state.setdefault("seeded_pairs", [])
+        tourn_state.setdefault("seeded_pairs", [])  # compatibilidad
         st.session_state.last_hash = compute_state_hash(tourn_state)
 
         t_name = tourn_state["meta"]["t_name"]
@@ -673,11 +732,15 @@ def admin_dashboard(admin_user: Dict[str, Any]):
             )
             cfg["format"] = fmt
 
+            # NUEVO: cabezas de serie
+            cfg["use_seeds"] = st.checkbox("Usar cabezas de serie (1 por zona)", value=bool(cfg.get("use_seeds", False)))
+            st.caption("Si está activo, podrás marcar exactamente N parejas como cabeza de serie (N = cantidad de zonas). Cada zona recibirá 1 cabeza; el resto se sortea al azar.")
+
             cA,cB,cC = st.columns(3)
             with cA:
                 if st.button("💾 Guardar configuración", type="primary"):
                     tourn_state["config"] = {
-                        k:int(v) if isinstance(v,(int,float)) and k not in ["t_name","format"] else v
+                        k:int(v) if isinstance(v,(int,float)) and k not in ["t_name","format","use_seeds"] else v
                         for k,v in cfg.items()
                     }
                     save_tournament(tourn_tid, tourn_state)
@@ -688,7 +751,23 @@ def admin_dashboard(admin_user: Dict[str, Any]):
                     if len(pairs) < cfg["num_zones"]:
                         st.error("Debe haber al menos tantas parejas como zonas.")
                     else:
-                        groups = create_groups(pairs, int(cfg["num_zones"]), seed=int(cfg["seed"]))
+                        try:
+                            if cfg.get("use_seeds", False):
+                                seeded_pairs = tourn_state.get("seeded_pairs", [])
+                                groups = create_groups_seeded(
+                                    pairs, int(cfg["num_zones"]),
+                                    int(cfg["top_per_zone"]), int(cfg["seed"]),
+                                    seeded_pairs
+                                )
+                            else:
+                                groups = create_groups_unseeded(
+                                    pairs, int(cfg["num_zones"]),
+                                    int(cfg["top_per_zone"]), int(cfg["seed"])
+                                )
+                        except ValueError as e:
+                            st.error(str(e))
+                            st.stop()
+
                         tourn_state["groups"] = groups
                         tourn_state["results"] = build_fixtures(groups)
                         tourn_state["ko"] = {"matches": []}  # limpiar KO si rehaces
@@ -727,41 +806,49 @@ def admin_dashboard(admin_user: Dict[str, Any]):
             pairs = tourn_state.get("pairs", [])
             max_pairs = int(tourn_state.get("config", {}).get("num_pairs", 16))
 
+            use_seeds = bool(tourn_state.get("config", {}).get("use_seeds", False))
+            num_zones = int(tourn_state.get("config", {}).get("num_zones", 4))
+            seeded = tourn_state.get("seeded_pairs", [])
+            seeded_set = set(seeded)
+            seeds_needed = num_zones
+            seeds_missing = max(0, seeds_needed - len(seeded_set))
+
             st.markdown("**Alta manual — una pareja por vez**")
-
-            p1_key = f"p1_{tourn_tid}"
-            p2_key = f"p2_{tourn_tid}"
-            if st.session_state.get(f"pairs_clear_{tourn_tid}", False):
-                st.session_state[p1_key] = ""
-                st.session_state[p2_key] = ""
-                st.session_state[f"pairs_clear_{tourn_tid}"] = False
-
             next_n = next_available_number(pairs, max_pairs)
-            c1,c2,c3,c4 = st.columns([1,3,3,2])
-            with c1:
-                st.text_input("N° pareja", value=(str(next_n) if next_n else "—"), disabled=True, key=f"num_auto_{tourn_tid}")
-            with c2:
-                if p1_key not in st.session_state:
-                    st.session_state[p1_key] = ""
-                p1 = st.text_input("Jugador 1", key=p1_key)
-            with c3:
-                if p2_key not in st.session_state:
-                    st.session_state[p2_key] = ""
-                p2 = st.text_input("Jugador 2", key=p2_key)
-            with c4:
-                disabled_btn = (next_n is None)
-                if st.button("➕ Agregar pareja", key=f"add_pair_{tourn_tid}", type="primary", disabled=disabled_btn):
-                    p1c, p2c = (p1 or "").strip(), (p2 or "").strip()
-                    if not p1c or not p2c:
-                        st.error("Completá ambos nombres.")
-                    else:
-                        label = format_pair_label(next_n, p1c, p2c)
-                        pairs.append(label)
-                        tourn_state["pairs"] = pairs
-                        save_tournament(tourn_tid, tourn_state)
-                        st.success(f"Agregada: {label}")
-                        st.session_state[f"pairs_clear_{tourn_tid}"] = True
-                        st.rerun()
+
+            with st.form(f"add_pair_form_{tourn_tid}", clear_on_submit=True):
+                c1,c2,c3,c4,c5 = st.columns([1,3,3,2,2])
+                with c1:
+                    st.text_input("N° pareja", value=(str(next_n) if next_n else "—"), disabled=True, key=f"num_auto_{tourn_tid}")
+                with c2:
+                    p1 = st.text_input("Jugador 1")
+                with c3:
+                    p2 = st.text_input("Jugador 2")
+                mark_seed = False
+                with c5:
+                    if use_seeds:
+                        can_mark = seeds_missing > 0
+                        mark_seed = st.checkbox("Cabeza de serie", value=False, disabled=not can_mark)
+                        if not can_mark:
+                            st.caption(f"({len(seeded_set)}/{seeds_needed} marcadas)")
+                submitted = st.form_submit_button("➕ Agregar pareja", disabled=(next_n is None), type="primary")
+
+            if submitted:
+                p1c, p2c = (p1 or "").strip(), (p2 or "").strip()
+                if not p1c or not p2c:
+                    st.error("Completá ambos nombres.")
+                else:
+                    label = format_pair_label(next_n, p1c, p2c)
+                    pairs.append(label)
+                    tourn_state["pairs"] = pairs
+                    if use_seeds and mark_seed:
+                        if label not in seeded_set and len(seeded_set) < seeds_needed:
+                            seeded_set.add(label)
+                            tourn_state["seeded_pairs"] = list(seeded_set)
+                    save_tournament(tourn_tid, tourn_state)
+                    st.success(f"Agregada: {label}{' (Cabeza de serie)' if use_seeds and label in seeded_set else ''}")
+                    st.rerun()
+
             if next_n is None:
                 st.warning(f"Se alcanzó el máximo de parejas configurado ({max_pairs}).")
 
@@ -806,6 +893,7 @@ def admin_dashboard(admin_user: Dict[str, Any]):
                             st.warning("El CSV no contenía filas válidas dentro del rango permitido.")
                         else:
                             tourn_state["pairs"] = new_list
+                            # no asignamos seeds por CSV automáticamente
                             save_tournament(tourn_tid, tourn_state)
                             st.success(f"Importadas {len(new_list)} parejas (máximo {max_pairs}).")
                             st.rerun()
@@ -818,6 +906,9 @@ def admin_dashboard(admin_user: Dict[str, Any]):
             if pairs:
                 st.markdown("### Listado de parejas")
                 df_pairs = pd.DataFrame({"Pareja": pairs})
+                # marcar seeds en la tabla
+                if use_seeds:
+                    df_pairs["Cabeza"] = df_pairs["Pareja"].apply(lambda x: "Sí" if x in seeded_set else "")
                 st.markdown(df_pairs.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
 
                 st.markdown("**Borrar pareja:**")
@@ -828,12 +919,38 @@ def admin_dashboard(admin_user: Dict[str, Any]):
                     col = cols[i % per_row]
                     with col:
                         if st.button(f"🗑️ Nº {n}", key=f"del_{tourn_tid}_{n}"):
+                            # si la pareja era seed, quitarla
+                            if label in seeded_set:
+                                seeded_set.remove(label)
+                                tourn_state["seeded_pairs"] = list(seeded_set)
                             tourn_state["pairs"] = remove_pair_by_number(pairs, n)
                             save_tournament(tourn_tid, tourn_state)
                             st.success(f"Eliminada pareja Nº {n}.")
                             st.rerun()
             else:
                 st.info("Aún no hay parejas cargadas.")
+
+            # Panel marcar/desmarcar seeds
+            if use_seeds and pairs:
+                st.divider()
+                st.markdown("#### Marcar / Desmarcar cabezas de serie")
+                st.caption(f"Debes marcar exactamente {seeds_needed} parejas. Actual: {len(seeded_set)}.")
+                for i, label in enumerate(pairs):
+                    is_seed = label in seeded_set
+                    cols = st.columns([6,1])
+                    cols[0].write(label + (" — **(Cabeza de serie)**" if is_seed else ""))
+                    with cols[1]:
+                        if st.button(("Quitar" if is_seed else "Marcar"), key=f"seed_toggle_{tourn_tid}_{i}"):
+                            if is_seed:
+                                seeded_set.remove(label)
+                            else:
+                                if len(seeded_set) >= seeds_needed:
+                                    st.error("Ya alcanzaste el máximo de cabezas de serie.")
+                                    st.stop()
+                                seeded_set.add(label)
+                            tourn_state["seeded_pairs"] = list(seeded_set)
+                            save_tournament(tourn_tid, tourn_state)
+                            st.rerun()
 
             if tourn_state.get("groups"):
                 st.divider()
@@ -1282,13 +1399,13 @@ def main():
 
     if mode=="public" and _tid:
         viewer_tournament(_tid, public=True)
-        st.caption("iAPPs Pádel — v3.3.29")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.30")
         return
 
     if not st.session_state.get("auth_user"):
         inject_global_layout("No autenticado")
         login_form()
-        st.caption("iAPPs Pádel — v3.3.29")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.30")
         return
 
     user = st.session_state["auth_user"]
@@ -1316,7 +1433,7 @@ def main():
     else:
         st.error("Rol desconocido.")
 
-    st.caption("iAPPs Pádel — v3.3.29")
+    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.30")
 
 # Ejecutar
 if __name__ == "__main__":
