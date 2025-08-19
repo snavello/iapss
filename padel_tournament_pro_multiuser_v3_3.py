@@ -708,8 +708,8 @@ def delete_tournament(admin_username: str, tid: str):
     for f in (snap_dir_for(tid)).glob("*.json"):
         try:
             f.unlink()
-    except Exception:
-        pass
+        except Exception:
+            pass
 
 def admin_dashboard(user: Dict[str, Any]):
     user_text = f"Usuario: <b>{user['username']}</b> &nbsp;|&nbsp; Rol: <code>{user['role']}</code> &nbsp;&nbsp;<a href='#' onclick='window.location.reload()'>Cerrar sesión</a>"
@@ -750,11 +750,14 @@ def admin_dashboard(user: Dict[str, Any]):
             st.rerun()
     with c2:
         if st.button("Eliminar torneo", type="secondary"):
-            delete_tournament(user["username"], sel["tournament_id"])
-            st.success("Torneo eliminado.")
-            if st.session_state.get("current_tid")==sel["tournament_id"]:
-                st.session_state.current_tid=None
-            st.rerun()
+            try:
+                delete_tournament(user["username"], sel["tournament_id"])
+                st.success("Torneo eliminado.")
+                if st.session_state.get("current_tid")==sel["tournament_id"]:
+                    st.session_state.current_tid=None
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error al eliminar el torneo: {e}")
     with c3:
         tid = sel["tournament_id"]
         public_link = get_public_link(tid)
