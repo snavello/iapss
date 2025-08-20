@@ -1206,7 +1206,7 @@ def viewer_tournament(tid: str, public: bool=False):
                 st.write(f"**Z{zi}**")
                 st.table(pd.DataFrame({"Parejas": group}))
     with tab_tables:
-        if not state.get("groups") or not state.get("results"]:
+        if not state.get("groups") or not state.get("results"):
             st.info("Sin fixture/resultados aún.")
         else:
             cfg = state["config"]
