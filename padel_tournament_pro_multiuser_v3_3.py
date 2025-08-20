@@ -1,6 +1,6 @@
 # padel_tournament_pro_multiuser_v3_3.py — v3.3.31
 # Cambios clave:
-# - Panel exclusivo SUPER_ADMIN (gestión de usuarios, PIN, roles, asignación de viewers, logo global).
+# - Panel exclusivo  SUPER_ADMIN (gestión de usuarios, PIN, roles, asignación de viewers, logo global).
 # - Ruteo: SUPER_ADMIN ya NO ve el panel de torneos; ve su propio panel.
 # - Mantiene intacto lo demás (torneos, resultados, tablas, playoffs, persistencia).
 
