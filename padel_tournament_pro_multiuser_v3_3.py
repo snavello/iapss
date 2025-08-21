@@ -1,17 +1,11 @@
-# padel_tournament_pro_multiuser_v3_3.py — v3.3.35
-# Cambios/funciones claves:
-# - Logo seguro (descarga URL RAW → data URI base64), con fallback SVG. Encabezado NO fijo.
-# - SUPER_ADMIN: gestión de usuarios (alta/baja/roles/PIN), logo global de la app.
-# - TOURNAMENT_ADMIN: torneos (config/parejas/resultados/tablas/playoffs/persistencia).
-# - VIEWER: solo lectura (modo público o asociado a un admin).
-# - Config: checkbox “Usar sistema de cabezas de serie” (seeds); marcar X seeds (= nº de zonas).
-# - Sorteo de zonas con 1 seed por zona y reparto mínimo por zona = clasificados (top_per_zone).
-# - Resultados: sets según formato + puntos de oro. Ganador resaltado.
-# - Tablas: desempates PTS→DG→GP→sorteo; encabezado oscuro, zebra, ✓ en 1° y 2°.
-# - Playoffs: genera ronda inicial acorde a Nº de clasificados (FN/SF/QF) y avanza hasta campeón.
-# - Link público con botón “📋 Copiar”.
-# - Persistencia: autosave + descarga/restore JSON (nombre con id + nombre + fecha + timestamp).
-# - Sintaxis revisada; sin escrituras a session_state de widgets ya instanciados en el mismo tick.
+# padel_tournament_pro_multiuser_v3_3.py — v3.3.36
+# Cambios (pedido):
+# 1) Link público completo en Admin (usa app_base_url) + botón 📋 Copiar renderizado correctamente.
+# 2) Eliminar “Datos del Torneo” (JSON) de Configuración.
+# 3) Botón “Sorteo” también en pestaña Parejas (además de Configuración).
+# 4) Alta de pareja con clear_on_submit=True (blanquea Jugador 1/2 al grabar).
+# 5) Resultados: inputs más angostos (≈ 1/3 de ancho) para reducir scroll.
+# 6) Persistencia movida a Configuración; pestaña Persistencia eliminada.
 
 import streamlit as st
 import pandas as pd
@@ -36,19 +30,33 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="iAPPs Pádel — v3.3.35", layout="wide")
+st.set_page_config(page_title="iAPPs Pádel — v3.3.36", layout="wide")
 
-# CSS básico para tablas HTML (zebra + header oscuro)
+# CSS básico
 st.markdown("""
 <style>
 table.zebra tbody tr:nth-child(odd) { background: #f9fafb; }
 table.dark-header thead th { background: #2f3b52; color: #fff; }
+/* Inputs angostos (número y texto) dentro de contenedores "thin" */
+.thin .stNumberInput, .thin .stTextInput, .thin .stSelectbox, .thin .stSlider {
+  max-width: 260px;
+}
+.thin-inline { display: inline-block; vertical-align: top; margin-right: 8px; }
+.iapps-header-row {
+  display:flex; align-items:center; gap:12px; padding:6px 0 4px 0; border-bottom:1px solid #e5e7eb;
+}
+.iapps-header-logo { max-height:54px; width:auto; height:auto; max-width:22vw; object-fit:contain; }
+.iapps-user { font-weight:600; }
+.iapps-role { color:#6b7280; margin-left:6px; }
+.copy-btn {
+  padding:4px 8px; border:1px solid #ddd; border-radius:6px; background:#f7f7f7; cursor:pointer;
+}
 </style>
 """, unsafe_allow_html=True)
 
 # ====== Persistencia (archivos) ======
 DATA_DIR = Path("data")
-APP_CONFIG_PATH = DATA_DIR / "app_config.json"   # Config global (logo_url)
+APP_CONFIG_PATH = DATA_DIR / "app_config.json"   # Config global (logo_url, base_url)
 USERS_PATH = DATA_DIR / "users.json"
 TOURN_DIR = DATA_DIR / "tournaments"
 SNAP_ROOT = TOURN_DIR / "snapshots"
@@ -62,10 +70,12 @@ SNAP_ROOT.mkdir(parents=True, exist_ok=True)
 sha = lambda s: hashlib.sha256(s.encode("utf-8")).hexdigest()
 now_iso = lambda: datetime.now().isoformat()
 
-# ====== Config de App global (logo por URL RAW) ======
+# ====== Config de App global ======
 DEFAULT_APP_CONFIG = {
-    # Puedes cambiar esta URL RAW si deseas precargar otro logo.
-    "app_logo_url": "https://raw.githubusercontent.com/snavello/iapss/main/1000138052.png"
+    # URL del logotipo (RAW GitHub recomendado)
+    "app_logo_url": "https://raw.githubusercontent.com/snavello/iapss/main/1000138052.png",
+    # Dominio base de la app (usado para link público completo)
+    "app_base_url": "https://iappspadel.streamlit.app"
 }
 
 def load_app_config() -> Dict[str, Any]:
@@ -74,9 +84,12 @@ def load_app_config() -> Dict[str, Any]:
         return DEFAULT_APP_CONFIG.copy()
     try:
         data = json.loads(APP_CONFIG_PATH.read_text(encoding="utf-8"))
+        # Campos mínimos
         if "app_logo_url" not in data:
             data["app_logo_url"] = DEFAULT_APP_CONFIG["app_logo_url"]
-            save_app_config(data)
+        if "app_base_url" not in data or not data["app_base_url"]:
+            data["app_base_url"] = DEFAULT_APP_CONFIG["app_base_url"]
+        save_app_config(data)
         return data
     except Exception:
         return DEFAULT_APP_CONFIG.copy()
@@ -84,13 +97,12 @@ def load_app_config() -> Dict[str, Any]:
 def save_app_config(cfg: Dict[str, Any]):
     APP_CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
-# ====== Logo seguro (Data URI) + fallback SVG ======
+# ====== Logo (Data URI) + fallback SVG ======
 PRIMARY_BLUE = "#0D47A1"
 LIME_GREEN  = "#AEEA00"
 DARK_BLUE   = "#082D63"
 
-def _brand_svg(width_px: int = 200) -> str:
-    # Fallback si no se puede descargar el logo remoto
+def _brand_svg(width_px: int = 180) -> str:
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width_px}" viewBox="0 0 660 200" role="img" aria-label="iAPPs PADEL TOURNAMENT">
   <defs>
     <linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
@@ -111,14 +123,12 @@ def _brand_svg(width_px: int = 200) -> str:
 
 @st.cache_data(show_spinner=False)
 def _fetch_image_data_uri(url: str, timeout: float = 6.0) -> str:
-    """Descarga una imagen remota y la convierte a data URI. Devuelve '' si falla."""
     try:
         if not url:
             return ""
         resp = requests.get(url, timeout=timeout)
         resp.raise_for_status()
         content = resp.content
-        # Detectar MIME simple por cabecera
         ct = (resp.headers.get("Content-Type") or "").lower()
         if "svg" in ct:
             mime = "image/svg+xml"
@@ -134,65 +144,28 @@ def _fetch_image_data_uri(url: str, timeout: float = 6.0) -> str:
         return ""
 
 def render_header_bar(user_name: str = "", role: str = "", logo_url: str = ""):
-    """
-    Encabezado simple NO fijo (no tapa el contenido y scrollea con la página).
-    Logo pequeño, responsive, cargado como data URI (si falla, SVG fallback).
-    """
-    st.markdown(
-        """
-        <style>
-        .iapps-header-row {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 6px 0 4px 0;
-            border-bottom: 1px solid #e5e7eb;
-        }
-        .iapps-header-logo {
-            max-height: 54px;
-            width: auto;
-            height: auto;
-            max-width: 22vw;
-            object-fit: contain;
-        }
-        .iapps-user { font-weight:600; }
-        .iapps-role { color:#6b7280; margin-left:6px; }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-
     st.markdown('<div class="iapps-header-row">', unsafe_allow_html=True)
     c_logo, c_spacer, c_user = st.columns([2, 6, 3])
-
     with c_logo:
         data_uri = _fetch_image_data_uri(logo_url) if logo_url else ""
         if data_uri:
             st.markdown(f'<img class="iapps-header-logo" src="{data_uri}" alt="iAPPs">', unsafe_allow_html=True)
         else:
             st.markdown(_brand_svg(180), unsafe_allow_html=True)
-
     with c_spacer:
-        st.markdown("")  # espacio
-
+        st.markdown("")
     with c_user:
         if user_name:
             st.markdown(
                 f'<span class="iapps-user">{user_name}</span><span class="iapps-role">({role})</span>',
                 unsafe_allow_html=True
             )
-            # Si implementas logout, coloca el botón aquí.
-
     st.markdown('</div>', unsafe_allow_html=True)
 
 def copy_to_clipboard_html(text: str, label: str = "Copiar"):
-    """
-    Botón HTML que copia `text` al portapapeles.
-    """
     safe = (text or "").replace("\\", "\\\\").replace("'", "\\'")
     return f"""
-    <button
-      style="padding:4px 8px;border:1px solid #ddd;border-radius:6px;background:#f7f7f7;cursor:pointer"
+    <button class="copy-btn"
       onclick="navigator.clipboard.writeText('{safe}');this.textContent='¡Copiado!';setTimeout(()=>this.textContent='📋 {label}',1200);"
       title="Copiar al portapapeles"
     >📋 {label}</button>
@@ -200,8 +173,8 @@ def copy_to_clipboard_html(text: str, label: str = "Copiar"):
 
 # ====== Usuarios ======
 DEFAULT_SUPER = {
-    "username": "ADMIN", "pin_hash": sha("199601"), "role": "SUPER_ADMIN",
-    "assigned_admin": None, "created_at": now_iso(), "active": True
+    "username": "ADMIN", "pin_hash": hashlib.sha256("199601".encode()).hexdigest(),
+    "role": "SUPER_ADMIN", "assigned_admin": None, "created_at": now_iso(), "active": True
 }
 
 def load_users() -> List[Dict[str, Any]]:
@@ -262,10 +235,8 @@ def save_tournament(tid: str, obj: Dict[str, Any], make_snapshot: bool=True):
         (sd / f"snapshot_{ts}.json").write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
         snaps = sorted([x for x in sd.glob("snapshot_*.json")], reverse=True)
         for old in snaps[KEEP_SNAPSHOTS:]:
-            try:
-                old.unlink()
-            except Exception:
-                pass
+            try: old.unlink()
+            except Exception: pass
 
 # ====== Reglas del torneo ======
 DEFAULT_CONFIG = {
@@ -287,8 +258,6 @@ def rr_schedule(group):
 
 def build_fixtures(groups):
     rows = []
-    if not groups:
-        return []
     for zi, group in enumerate(groups, start=1):
         zone = f"Z{zi}"
         for a, b in rr_schedule(group):
@@ -301,14 +270,11 @@ def build_fixtures(groups):
 def validate_sets(fmt: str, sets: List[Dict[str,int]]) -> Tuple[bool, str]:
     n = len(sets)
     if fmt == "one_set":
-        if n != 1:
-            return False, "Formato a 1 set: debe haber exactamente 1 set."
+        if n != 1: return False, "Formato a 1 set: debe haber exactamente 1 set."
     elif fmt == "best_of_3":
-        if n < 2 or n > 3:
-            return False, "Formato al mejor de 3: debe haber 2 o 3 sets."
+        if n < 2 or n > 3: return False, "Formato al mejor de 3: debe haber 2 o 3 sets."
     elif fmt == "best_of_5":
-        if n < 3 or n > 5:
-            return False, "Formato al mejor de 5: debe haber entre 3 y 5 sets."
+        if n < 3 or n > 5: return False, "Formato al mejor de 5: debe haber entre 3 y 5 sets."
     return True, ""
 
 def compute_sets_stats(sets: List[Dict[str,int]]) -> Dict[str,int]:
@@ -326,12 +292,10 @@ def match_has_winner(sets: List[Dict[str,int]]) -> bool:
 
 def zone_complete(zone_name: str, results_list: List[Dict[str,Any]], fmt: str) -> bool:
     ms = [m for m in results_list if m["zone"]==zone_name]
-    if not ms:
-        return False
+    if not ms: return False
     for m in ms:
         ok,_ = validate_sets(fmt, m.get("sets", []))
-        if not ok or not match_has_winner(m.get("sets", [])):
-            return False
+        if not ok or not match_has_winner(m.get("sets", [])): return False
     return True
 
 def standings_from_results(zone_name, group_pairs, results_list, cfg):
@@ -339,12 +303,10 @@ def standings_from_results(zone_name, group_pairs, results_list, cfg):
     table = pd.DataFrame(rows).set_index("pair")
     fmt = cfg.get("format","best_of_3")
     for m in results_list:
-        if m["zone"] != zone_name:
-            continue
+        if m["zone"] != zone_name: continue
         sets = m.get("sets", [])
         ok, _ = validate_sets(fmt, sets)
-        if not ok or not match_has_winner(sets):
-            continue
+        if not ok or not match_has_winner(sets): continue
         stats = compute_sets_stats(sets)
         p1, p2 = m["pair1"], m["pair2"]
         g1,g2 = stats["games1"], stats["games2"]
@@ -376,8 +338,7 @@ def standings_from_results(zone_name, group_pairs, results_list, cfg):
 def qualified_from_tables(zone_tables, k):
     qualified = []
     for table in zone_tables:
-        if table.empty:
-            continue
+        if table.empty: continue
         z = table.iloc[0]["Zona"]
         q = table.head(int(k))
         for _, row in q.iterrows():
@@ -387,8 +348,7 @@ def qualified_from_tables(zone_tables, k):
 # ====== Playoffs helpers ======
 def next_pow2(n: int) -> int:
     p = 1
-    while p < n:
-        p <<= 1
+    while p < n: p <<= 1
     return p
 
 def starting_round_name(n_slots: int) -> str:
@@ -397,9 +357,7 @@ def starting_round_name(n_slots: int) -> str:
     return "QF"
 
 def pairs_seed_v1(winners: List[Tuple[str,int,str]], runners: List[Tuple[str,int,str]]) -> List[Tuple[str,str]]:
-    # empareja 1ro vs 2do de otras zonas (rotación simple)
-    if not winners or not runners:
-        return []
+    if not winners or not runners: return []
     m = min(len(winners), len(runners))
     winners = winners[:m]; runners = runners[:m]
     rr = runners[1:] + runners[:1] if len(runners) > 1 else runners
@@ -407,11 +365,10 @@ def pairs_seed_v1(winners: List[Tuple[str,int,str]], runners: List[Tuple[str,int
 
 def build_initial_ko(qualified: List[Tuple[str,int,str]]) -> List[Dict[str,Any]]:
     N = len(qualified)
-    if N == 0:
-        return []
+    if N == 0: return []
     winners = [q for q in qualified if q[1]==1]
     runners = [q for q in qualified if q[1]==2]
-    slots = next_pow2(N)  # 2,4,8,16...
+    slots = next_pow2(N)
     start_round = starting_round_name(slots)
 
     if N == slots:
@@ -431,7 +388,7 @@ def build_initial_ko(qualified: List[Tuple[str,int,str]]) -> List[Dict[str,Any]]
                 pairs = [(names[i], names[-(i+1)]) for i in range(4)]
             return [{"round":"QF","label":f"QF{i+1}","a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0} for i,(a,b) in enumerate(pairs)]
 
-    # N no potencia de 2 → BYEs
+    # N no potencia de 2 → BYEs repartidos
     names = [q[2] for q in sorted(qualified, key=lambda x:(x[1], x[0]))]
     byes = slots - N
     start_matches = []
@@ -455,8 +412,7 @@ def advance_pairs_from_round(matches_round: List[Dict[str,Any]]) -> List[str]:
     winners=[]
     for m in matches_round:
         sets = m.get("sets", [])
-        if not sets or not match_has_winner(sets):
-            return []
+        if not sets or not match_has_winner(sets): return []
         stats = compute_sets_stats(sets)
         winners.append(m['a'] if stats["sets1"]>stats["sets2"] else m['b'])
     return winners
@@ -464,10 +420,8 @@ def advance_pairs_from_round(matches_round: List[Dict[str,Any]]) -> List[str]:
 def make_next_round_name(current: str) -> Optional[str]:
     order=["QF","SF","FN"]
     if current=="FN": return None
-    try:
-        i=order.index(current)
-    except ValueError:
-        return None
+    try: i=order.index(current)
+    except ValueError: return None
     return order[i+1]
 
 def pairs_to_matches(pairs: List[Tuple[str, Optional[str]]], round_name: str) -> List[Dict[str,Any]]:
@@ -529,25 +483,18 @@ def next_available_number(pairs: List[str], max_pairs: int) -> Optional[int]:
     used = set()
     for p in pairs:
         n = parse_pair_number(p)
-        if n is not None:
-            used.add(n)
+        if n is not None: used.add(n)
     for n in range(1, max_pairs+1):
-        if n not in used:
-            return n
+        if n not in used: return n
     return None
 
 def format_pair_label(n: int, j1: str, j2: str) -> str:
     return f"{n:02d} — {j1.strip()} / {j2.strip()}"
 
 def remove_pair_by_number(pairs: List[str], n: int) -> List[str]:
-    out = []
-    for p in pairs:
-        pn = parse_pair_number(p)
-        if pn != n:
-            out.append(p)
-    return out
+    return [p for p in pairs if parse_pair_number(p) != n]
 
-# ====== SUPER ADMIN PANEL ======
+# ====== SUPER ADMIN ======
 def super_admin_panel():
     user = st.session_state["auth_user"]
     app_cfg = load_app_config()
@@ -559,19 +506,19 @@ def super_admin_panel():
 
     st.header("👑 Panel de SUPER ADMIN")
 
-    # Apariencia
-    with st.expander("🎨 Apariencia (Logo global de la app)", expanded=True):
+    with st.expander("🎨 Apariencia (Logo global y dominio público)", expanded=True):
         url = st.text_input("URL pública del logotipo (RAW de GitHub recomendado)", value=app_cfg.get("app_logo_url","")).strip()
-        if st.button("Guardar logo global", type="primary"):
+        base = st.text_input("Dominio base de la app (para link público)", value=app_cfg.get("app_base_url","")).strip()
+        if st.button("Guardar apariencia", type="primary"):
             app_cfg["app_logo_url"] = url
+            app_cfg["app_base_url"] = base or DEFAULT_APP_CONFIG["app_base_url"]
             save_app_config(app_cfg)
-            st.success("Logo global guardado. (Refrescá la página si no lo ves de inmediato)")
+            st.success("Apariencia guardada.")
 
     st.divider()
     st.subheader("👥 Gestión de usuarios")
 
     users = load_users()
-    # Crear usuario
     with st.form("create_user_form", clear_on_submit=True):
         c1,c2,c3,c4 = st.columns([3,2,2,3])
         with c1:
@@ -599,12 +546,12 @@ def super_admin_panel():
                 st.success(f"Usuario {new_u} creado.")
 
     st.markdown("### Lista y edición")
+    users = load_users()
     for usr in users:
         with st.container(border=True):
             st.write(f"**{usr['username']}** — rol `{usr['role']}` — activo `{usr.get('active',True)}`")
             c1,c2,c3,c4,c5 = st.columns([2,2,2,3,2])
 
-            # Cambiar rol
             with c1:
                 new_role = st.selectbox(
                     f"Rol de {usr['username']}",
@@ -613,7 +560,6 @@ def super_admin_panel():
                     key=f"role_{usr['username']}",
                     disabled=(usr["username"]=="ADMIN")
                 )
-            # Asignar admin a viewer
             with c2:
                 if new_role=="VIEWER" or usr["role"]=="VIEWER":
                     admins=[x["username"] for x in users if x["role"]=="TOURNAMENT_ADMIN" and x.get("active",True)]
@@ -629,49 +575,40 @@ def super_admin_panel():
                 else:
                     new_assigned = None
                     st.caption("—")
-
-            # Activo/inactivo
             with c3:
                 active_toggle = st.checkbox("Activo", value=usr.get("active",True), key=f"act_{usr['username']}")
-
-            # PIN
             with c4:
                 if usr["username"]=="ADMIN":
                     st.caption("PIN de ADMIN fijo en 199601 (no editable).")
                     pin_value = None
                 else:
                     pin_value = st.text_input(f"Nuevo PIN ({usr['username']}) (opcional)", max_chars=6, key=f"pin_{usr['username']}")
-
-            # Guardar cambios
             with c5:
                 if st.button(f"💾 Guardar {usr['username']}", key=f"save_{usr['username']}"):
                     if usr["username"]=="ADMIN":
                         usr["role"] = "SUPER_ADMIN"
-                        usr["pin_hash"] = sha("199601")  # asegurar
+                        usr["pin_hash"] = sha("199601")
                     else:
                         usr["role"] = new_role
                         if pin_value:
                             if len(pin_value)==6 and pin_value.isdigit():
                                 usr["pin_hash"] = sha(pin_value)
                             else:
-                                st.error("PIN inválido (debe ser 6 dígitos).")
-                                st.stop()
+                                st.error("PIN inválido (6 dígitos)."); st.stop()
                         usr["assigned_admin"] = new_assigned if usr["role"]=="VIEWER" else None
                     usr["active"] = bool(active_toggle)
                     set_user(usr)
                     st.success("Cambios guardados.")
 
-    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.35")
+    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.36")
 
 # ====== ADMIN (torneos) ======
 def load_index_for_admin(admin_username: str) -> List[Dict[str, Any]]:
     idx = load_index()
     my = [t for t in idx if t.get("admin_username")==admin_username]
     def keyf(t):
-        try:
-            return datetime.fromisoformat(t.get("date"))
-        except Exception:
-            return datetime.min
+        try: return datetime.fromisoformat(t.get("date"))
+        except Exception: return datetime.min
     return sorted(my, key=keyf, reverse=True)
 
 def create_tournament(admin_username: str, t_name: str, place: str, tdate: str, gender: str) -> str:
@@ -692,13 +629,10 @@ def delete_tournament(admin_username: str, tid: str):
     idx = [t for t in idx if not (t["tournament_id"]==tid and t["admin_username"]==admin_username)]
     save_index(idx)
     p = tourn_path(tid)
-    if p.exists():
-        p.unlink()
+    if p.exists(): p.unlink()
     for f in (snap_dir_for(tid)).glob("*.json"):
-        try:
-            f.unlink()
-        except Exception:
-            pass
+        try: f.unlink()
+        except Exception: pass
 
 def create_groups_unseeded(pairs: List[str], num_groups: int, top_per_zone: int, seed: int) -> List[List[str]]:
     r = random.Random(int(seed))
@@ -725,10 +659,10 @@ def create_groups_seeded(pairs: List[str], seeded_labels: List[str], num_groups:
     non_seeded = [p for p in pairs if p not in seeded_labels]
     r.shuffle(non_seeded)
     groups = [[] for _ in range(num_groups)]
-    # 1) 1 seed por grupo
+    # 1 seed por grupo
     for i, s in enumerate(seeded[:num_groups]):
         groups[i].append(s)
-    # 2) mínimo por zona = top_per_zone
+    # mínimo por zona = top_per_zone
     min_per_zone = max(1, int(top_per_zone))
     total = len(pairs)
     desired_min_total = num_groups * min_per_zone
@@ -737,7 +671,6 @@ def create_groups_seeded(pairs: List[str], seeded_labels: List[str], num_groups:
         if len(groups[gi]) < min_per_zone:
             groups[gi].append(non_seeded.pop())
         gi = (gi + 1) % num_groups
-    # 3) resto
     gi = 0
     while non_seeded:
         groups[gi].append(non_seeded.pop())
@@ -788,10 +721,9 @@ def admin_dashboard(admin_user: Dict[str, Any]):
     with c3:
         tid = sel["tournament_id"]
         st.caption("Link público (solo lectura):")
-        # URL relativa (sirve dentro de la app). Si quieres full URL, reemplaza por la de tu app.
-        public_url = f"?mode=public&tid={tid}"
-        # public_url = f"https://iappspadel.streamlit.app/?mode=public&tid={tid}"
-        st.code(public_url, language=None)
+        public_url = f"{app_cfg.get('app_base_url', DEFAULT_APP_CONFIG['app_base_url'])}/?mode=public&tid={tid}"
+        # Muestra el link completo (copiable)
+        st.text_input("URL pública", value=public_url, label_visibility="collapsed", key=f"pub_{tid}")
         st.markdown(copy_to_clipboard_html(public_url), unsafe_allow_html=True)
 
     if st.session_state.get("current_tid"):
@@ -804,17 +736,15 @@ def tournament_manager(user: Dict[str, Any], tid: str):
         st.error("No se encontró el torneo.")
         return
 
-    tab_cfg, tab_pairs, tab_results, tab_tables, tab_ko, tab_persist = st.tabs(
-        ["⚙️ Configuración", "👥 Parejas", "📝 Resultados", "📊 Tablas", "🏁 Playoffs", "💾 Persistencia"]
+    # pestañas (sin “Persistencia”, se movió a Configuración)
+    tab_cfg, tab_pairs, tab_results, tab_tables, tab_ko = st.tabs(
+        ["⚙️ Configuración", "👥 Parejas", "📝 Resultados", "📊 Tablas", "🏁 Playoffs"]
     )
 
     cfg = state.get("config", DEFAULT_CONFIG.copy())
 
     # --- CONFIG ---
     with tab_cfg:
-        st.subheader("Datos del torneo")
-        m = state.get("meta", {})
-        st.write({"ID":m.get("tournament_id"),"Nombre":m.get("t_name"),"Lugar":m.get("place"),"Fecha":m.get("date"),"Género":m.get("gender"),"Admin":m.get("admin_username")})
         st.subheader("Configuración deportiva")
         c1,c2,c3,c4 = st.columns(4)
         with c1:
@@ -856,7 +786,7 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                     if cfg.get("use_seeds", False):
                         seeded = state.get("seeded_pairs", [])
                         if len(seeded) != int(cfg["num_zones"]):
-                            st.error(f"Debes marcar exactamente {int(cfg['num_zones'])} cabezas de serie antes de sortear.")
+                            st.error(f"Seleccioná exactamente {int(cfg['num_zones'])} cabezas de serie antes de sortear.")
                             st.stop()
                         groups = create_groups_seeded(pairs, seeded, int(cfg["num_zones"]), int(cfg["top_per_zone"]), int(cfg["seed"]))
                     else:
@@ -866,6 +796,39 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                     state["ko"] = {"matches": []}
                     save_tournament(tid, state); st.success("Zonas + fixture generados.")
 
+        st.divider()
+        # ===== Persistencia (movida aquí) =====
+        st.subheader("💾 Persistencia")
+        def sanitize_filename(s: str) -> str:
+            return "".join(ch if ch.isalnum() or ch in ("-","_") else "_" for ch in s).strip("_")
+        c1p,c2p,c3p,c4p = st.columns(4)
+        with c1p:
+            st.session_state.autosave = st.checkbox("Autosave", value=st.session_state.autosave)
+        with c2p:
+            if st.button("💾 Guardar ahora"):
+                save_tournament(tid, state); st.success("Guardado")
+        with c3p:
+            meta = state.get("meta", {})
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            fname = f"{meta.get('tournament_id','')}_{sanitize_filename(meta.get('t_name',''))}_{meta.get('date','')}_{ts}.json"
+            st.download_button(
+                "⬇️ Descargar estado (JSON)",
+                data=json.dumps(state, ensure_ascii=False, indent=2).encode("utf-8"),
+                file_name=fname, mime="application/json", key=f"dl_state_json_{tid}"
+            )
+        with c4p:
+            up = st.file_uploader("⬆️ Cargar estado", type=["json"], key=f"up_{tid}")
+            if up is not None:
+                st.warning("⚠️ Restauración completa: se guardará el archivo subido como estado del torneo.")
+                if st.button("Confirmar restauración", key=f"confirm_restore_{tid}", type="primary"):
+                    try:
+                        new_state = json.load(up)
+                        save_tournament(tid, new_state)
+                        st.success("Cargado y guardado.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al cargar: {e}")
+
     # --- PAREJAS ---
     with tab_pairs:
         st.subheader("Parejas")
@@ -874,20 +837,20 @@ def tournament_manager(user: Dict[str, Any], tid: str):
 
         colL, colR = st.columns([1, 1])
 
-        # ---- Izquierda: alta manual
+        # Alta manual con form (clear_on_submit)
         with colL:
             st.markdown("**Alta manual — una pareja por vez**")
             next_n = next_available_number(pairs, max_pairs)
-            c1,c2,c3 = st.columns([1,3,3])
-            with c1:
-                st.text_input("N°", value=(str(next_n) if next_n else "—"), disabled=True, key=f"num_auto_{tid}")
-            with c2:
-                p1 = st.text_input("Jugador 1", key=f"p1_{tid}")
-            with c3:
-                p2 = st.text_input("Jugador 2", key=f"p2_{tid}")
-
-            disabled_btn = (next_n is None)
-            if st.button("Agregar", key=f"add_pair_{tid}", type="primary", disabled=disabled_btn):
+            with st.form(f"add_pair_form_{tid}", clear_on_submit=True):
+                c1,c2,c3 = st.columns([1,3,3])
+                with c1:
+                    st.text_input("N°", value=(str(next_n) if next_n else "—"), disabled=True)
+                with c2:
+                    p1 = st.text_input("Jugador 1")
+                with c3:
+                    p2 = st.text_input("Jugador 2")
+                subm = st.form_submit_button("Agregar", type="primary", disabled=(next_n is None))
+            if subm:
                 p1c, p2c = (p1 or "").strip(), (p2 or "").strip()
                 if not p1c or not p2c:
                     st.error("Completá ambos nombres.")
@@ -898,11 +861,9 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                     save_tournament(tid, state)
                     st.success(f"Agregada: {label}")
                     st.rerun()
-
             if next_n is None:
-                st.warning(f"Se alcanzó el máximo de parejas configurado ({max_pairs}). Borrá alguna o aumenta el máximo en Configuración.")
+                st.warning(f"Se alcanzó el máximo de parejas ({max_pairs}).")
 
-        # ---- Derecha: listado con 🗑️
         with colR:
             st.markdown("**Listado**")
             if not pairs:
@@ -922,6 +883,7 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                             st.rerun()
 
         st.divider()
+        # Cabezas de serie
         st.subheader("Cabezas de serie")
         use_seeds = bool(state.get("config", {}).get("use_seeds", False))
         num_groups = int(state.get("config", {}).get("num_zones", 4))
@@ -936,7 +898,7 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                 default=current,
                 max_selections=num_groups
             )
-            if st.button("💾 Guardar cabezas de serie"):
+            if st.button("💾 Guardar cabezas de serie", key=f"save_seeds_{tid}"):
                 if len(selected) != num_groups:
                     st.error(f"Debes seleccionar exactamente {num_groups}.")
                 else:
@@ -946,11 +908,34 @@ def tournament_manager(user: Dict[str, Any], tid: str):
         else:
             st.info("El torneo no usa cabezas de serie (activá la opción en Configuración).")
 
+        # Sorteo también aquí
+        st.divider()
+        st.subheader("Sorteo de zonas (acceso rápido)")
+        if st.button("🎲 Sortear zonas", key=f"sorteo_pairs_{tid}"):
+            cfg = state["config"]
+            pairs = state.get("pairs", [])
+            if len(pairs) < cfg["num_zones"]:
+                st.error("Debe haber al menos tantas parejas como zonas.")
+            else:
+                if cfg.get("use_seeds", False):
+                    seeded = state.get("seeded_pairs", [])
+                    if len(seeded) != int(cfg["num_zones"]):
+                        st.error(f"Debes marcar {int(cfg['num_zones'])} cabezas de serie antes del sorteo.")
+                        st.stop()
+                    groups = create_groups_seeded(pairs, seeded, int(cfg["num_zones"]), int(cfg["top_per_zone"]), int(cfg["seed"]))
+                else:
+                    groups = create_groups_unseeded(pairs, int(cfg["num_zones"]), int(cfg["top_per_zone"]), int(cfg["seed"]))
+                state["groups"] = groups
+                state["results"] = build_fixtures(groups)
+                state["ko"] = {"matches": []}
+                save_tournament(tid, state); st.success("Zonas + fixture generados.")
+                st.rerun()
+
     # --- RESULTADOS ---
     with tab_results:
         st.subheader("Resultados — fase de grupos (sets + puntos de oro)")
         if not state.get("groups"):
-            st.info("Primero crea/sortea zonas en Configuración.")
+            st.info("Primero crea/sortea zonas en Configuración o Parejas.")
         else:
             fmt = state["config"].get("format","best_of_3")
             zones = sorted({m["zone"] for m in state["results"]})
@@ -978,23 +963,28 @@ def tournament_manager(user: Dict[str, Any], tid: str):
 
                     cur_sets = m.get("sets", [])
                     n_min, n_max = (1,1) if fmt=="one_set" else ((2,3) if fmt=="best_of_3" else (3,5))
-                    n_sets = st.number_input(
-                        "Sets jugados", min_value=n_min, max_value=n_max,
-                        value=min(max(len(cur_sets), n_min), n_max),
-                        key=f"ns_{tid}_{idx}"
-                    )
+                    # Tres columnas angostas: N° sets | (vacía) | (vacía)
+                    cN, _, _ = st.columns([1,1,1])
+                    with cN:
+                        n_sets = st.number_input(
+                            "Sets jugados", min_value=n_min, max_value=n_max,
+                            value=min(max(len(cur_sets), n_min), n_max),
+                            key=f"ns_{tid}_{idx}"
+                        )
+
+                    # Para cada set: 3 columnas angostas: s1 | s2 | (espacio)
                     new_sets = []
                     for si in range(n_sets):
-                        cA,cB = st.columns(2)
+                        cA,cB,_ = st.columns([1,1,1])
                         with cA:
                             s1 = st.number_input(
-                                f"Set {si+1} — games {m['pair1']}", 0, 20,
+                                f"Set {si+1} — {m['pair1']}", 0, 20,
                                 int(cur_sets[si]["s1"]) if si<len(cur_sets) and "s1" in cur_sets[si] else 0,
                                 key=f"s1_{tid}_{idx}_{si}"
                             )
                         with cB:
                             s2 = st.number_input(
-                                f"Set {si+1} — games {m['pair2']}", 0, 20,
+                                f"Set {si+1} — {m['pair2']}", 0, 20,
                                 int(cur_sets[si]["s2"]) if si<len(cur_sets) and "s2" in cur_sets[si] else 0,
                                 key=f"s2_{tid}_{idx}_{si}"
                             )
@@ -1002,12 +992,15 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                     ok, msg = validate_sets(fmt, new_sets)
                     if not ok:
                         st.error(msg)
-                    gC,gD = st.columns(2)
+
+                    # Puntos de oro: 3 columnas angostas: g1 | g2 | (espacio)
+                    gC,gD,_ = st.columns([1,1,1])
                     with gC:
                         g1 = st.number_input(f"Puntos de oro {m['pair1']}", 0, 200, int(m.get("golden1",0)), key=f"g1_{tid}_{idx}")
                     with gD:
                         g2 = st.number_input(f"Puntos de oro {m['pair2']}", 0, 200, int(m.get("golden2",0)), key=f"g2_{tid}_{idx}")
 
+                    # Botón guardar
                     if st.button("Guardar partido", key=f"sv_{tid}_{idx}"):
                         stats = compute_sets_stats(new_sets)
                         if stats["sets1"] == stats["sets2"]:
@@ -1044,7 +1037,6 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                 if table.empty:
                     st.info("Sin datos para mostrar todavía.")
                 else:
-                    # Agregar ✓ visual y ordenar columnas
                     show = table.rename(columns={"pair":"Pareja"})
                     show["✓"] = show["Pos"].apply(lambda x: "✅" if x in (1,2) else "")
                     show = show[["Zona","Pos","✓","Pareja","PJ","PG","PP","GF","GC","DG","GP","PTS"]]
@@ -1116,23 +1108,25 @@ def tournament_manager(user: Dict[str, Any], tid: str):
 
                             cur_sets = m.get("sets", [])
                             n_min, n_max = (1,1) if fmt=="one_set" else ((2,3) if fmt=="best_of_3" else (3,5))
-                            n_sets = st.number_input(
-                                "Sets jugados", min_value=n_min, max_value=n_max,
-                                value=min(max(len(cur_sets), n_min), n_max),
-                                key=f"ko_ns_{tid}_{rname}_{idx}"
-                            )
+                            cN,_,_ = st.columns([1,1,1])
+                            with cN:
+                                n_sets = st.number_input(
+                                    "Sets jugados", min_value=n_min, max_value=n_max,
+                                    value=min(max(len(cur_sets), n_min), n_max),
+                                    key=f"ko_ns_{tid}_{rname}_{idx}"
+                                )
                             new_sets = []
                             for si in range(n_sets):
-                                cA,cB = st.columns(2)
+                                cA,cB,_ = st.columns([1,1,1])
                                 with cA:
                                     s1 = st.number_input(
-                                        f"Set {si+1} — games {m['a']}", 0, 20,
+                                        f"Set {si+1} — {m['a']}", 0, 20,
                                         int(cur_sets[si]["s1"]) if si<len(cur_sets) and "s1" in cur_sets[si] else 0,
                                         key=f"ko_s1_{tid}_{rname}_{idx}_{si}"
                                     )
                                 with cB:
                                     s2 = st.number_input(
-                                        f"Set {si+1} — games {m['b']}", 0, 20,
+                                        f"Set {si+1} — {m['b']}", 0, 20,
                                         int(cur_sets[si]["s2"]) if si<len(cur_sets) and "s2" in cur_sets[si] else 0,
                                         key=f"ko_s2_{tid}_{rname}_{idx}_{si}"
                                     )
@@ -1140,7 +1134,7 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                             ok, msg = validate_sets(fmt, new_sets)
                             if not ok:
                                 st.error(msg)
-                            gC,gD = st.columns(2)
+                            gC,gD,_ = st.columns([1,1,1])
                             with gC:
                                 g1 = st.number_input(f"Puntos de oro {m['a']}", 0, 200, int(m.get("goldenA",0)), key=f"ko_g1_{tid}_{rname}_{idx}")
                             with gD:
@@ -1159,13 +1153,11 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                                 st.success("KO guardado.")
                                 st.rerun()
 
-                            # ganador (si lo hay)
                             if m.get("sets") and match_has_winner(m["sets"]):
                                 statsF = compute_sets_stats(m["sets"])
                                 winnerF = m['a'] if statsF["sets1"]>statsF["sets2"] else m['b']
                                 advancing.append(winnerF)
 
-                    # Avance de ronda
                     if rname == "FN":
                         if advancing and len(advancing)==1:
                             final_champion = advancing[0]
@@ -1180,7 +1172,6 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                         next_rname = make_next_round_name(rname)
                         if next_rname:
                             pairs = next_round(advancing)
-                            # Elimina ronda siguiente existente y la vuelve a generar
                             state["ko"]["matches"] = [mm for mm in state["ko"]["matches"] if mm.get("round") not in (next_rname,)]
                             state["ko"]["matches"].extend(pairs_to_matches(pairs, next_rname))
                             save_tournament(tid, state)
@@ -1189,43 +1180,7 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                     else:
                         st.info("⏳ A definir — Falta completar partidos de esta fase para avanzar.")
 
-    # --- PERSISTENCIA ---
-    with tab_persist:
-        st.subheader("Persistencia (autosave + snapshots)")
-        def sanitize_filename(s: str) -> str:
-            return "".join(ch if ch.isalnum() or ch in ("-","_") else "_" for ch in s).strip("_")
-        c1,c2,c3,c4 = st.columns(4)
-        with c1:
-            st.session_state.autosave = st.checkbox("Autosave", value=st.session_state.autosave)
-        with c2:
-            if st.button("💾 Guardar ahora"):
-                save_tournament(tid, state)
-                st.success("Guardado")
-        with c3:
-            meta = state.get("meta", {})
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            fname = f"{meta.get('tournament_id','')}_{sanitize_filename(meta.get('t_name',''))}_{meta.get('date','')}_{ts}.json"
-            st.download_button(
-                "⬇️ Descargar estado (JSON)",
-                data=json.dumps(state, ensure_ascii=False, indent=2).encode("utf-8"),
-                file_name=fname,
-                mime="application/json",
-                key="dl_state_json"
-            )
-        with c4:
-            up = st.file_uploader("⬆️ Cargar estado", type=["json"], key=f"up_{tid}")
-            if up is not None:
-                st.warning("⚠️ Restauración completa: guardaré el archivo subido como estado del torneo.")
-                if st.button("Confirmar restauración", key=f"confirm_restore_{tid}", type="primary"):
-                    try:
-                        new_state = json.load(up)
-                        save_tournament(tid, new_state)
-                        st.success("Cargado y guardado.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error al cargar: {e}")
-
-    # Autosave simple
+    # Autosave
     current_hash = compute_state_hash(state)
     if st.session_state.autosave and current_hash != st.session_state.last_hash:
         save_tournament(tid, state)
@@ -1326,7 +1281,6 @@ def main():
     if not st.session_state.get("auth_user"):
         app_cfg = load_app_config()
         render_header_bar(user_name="", role="", logo_url=app_cfg.get("app_logo_url",""))
-        # Login
         st.markdown("### Ingreso — Usuario + PIN (6 dígitos)")
         with st.form("login", clear_on_submit=True):
             username = st.text_input("Usuario").strip()
@@ -1344,23 +1298,22 @@ def main():
                 st.session_state.auth_user = user
                 st.success(f"Bienvenido {user['username']} ({user['role']})")
                 st.rerun()
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.35")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.36")
         return
 
     user = st.session_state["auth_user"]
 
-    # Ruteo por rol
     if user["role"] == "SUPER_ADMIN":
         if mode=="public" and _tid:
             viewer_tournament(_tid, public=True)
         else:
             super_admin_panel()
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.35")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.36")
         return
 
     if user["role"] == "TOURNAMENT_ADMIN":
         admin_dashboard(user)
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.35")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.36")
         return
 
     if user["role"] == "VIEWER":
@@ -1368,11 +1321,11 @@ def main():
             viewer_tournament(_tid, public=True)
         else:
             viewer_dashboard(user)
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.35")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.36")
         return
 
     st.error("Rol desconocido.")
-    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.35")
+    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.36")
 
 if __name__ == "__main__":
     main()
