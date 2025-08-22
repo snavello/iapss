@@ -1,7 +1,7 @@
-# padel_tournament_pro_multiuser_v3_3.py — v3.3.41
+# padel_tournament_pro_multiuser_v3_3.py — v3.3.41 (hotfix SF/FN)
 # Correcciones clave: guardado atómico de partidos (grupos/KO) con st.form y claves únicas,
 # progresión KO robusta, recálculo de tablas tras guardar, autosave conservador, link público editable,
-# logo por URL con fallback SVG. Sin cambios de UI fuera de lo indicado.
+# logo por URL con fallback SVG. Hotfix: st.rerun() tras guardar KO para mostrar trofeo y avanzar ronda.
 
 import streamlit as st
 import pandas as pd
@@ -407,7 +407,9 @@ def format_pair_label(n:int,j1:str,j2:str)->str:
     return f"{n:02d} — {j1.strip()} / {j2.strip()}"
 
 def remove_pair_by_number(pairs:List[str], n:int)->List[str]:
-    return [p for p in pairs if parse_pair_number(p)!=n]# ===== SUPER ADMIN =====
+    return [p for p in pairs if parse_pair_number(p)!=n]
+
+# ===== SUPER ADMIN =====
 def super_admin_panel():
     user = st.session_state["auth_user"]
     app_cfg = load_app_config()
@@ -847,24 +849,32 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                 else:
                     show=table[["Zona","Pos","Pareja","PJ","PG","PP","GF","GC","DG","GP","PTS"]]
                     st.markdown(show.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
-                    # --- PLAYOFFS ---
-                    def ko_widget_key(tid_:str, mid_:str, name:str)->str:
-                        return f"{name}__{tid_}__{mid_}"
+# --- PLAYOFFS ---
+    def ko_widget_key(tid_:str, mid_:str, name:str)->str:
+        return f"{name}__{tid_}__{mid_}"
 
+    # HOTFIX: esta versión incluye st.rerun() tras guardar para refrescar trofeo y progresión
     def render_playoff_match(tid_:str, match:dict, tourn_state:dict):
         mid=match.get("mid")
         if not mid:
             match["mid"]=_mid_for(match.get("round","R"),match.get("label","M"),match.get("a","A"),match.get("b","B"))
             mid=match["mid"]
+
         fmt_local=tourn_state["config"].get("format","best_of_3")
         best_of=match.get("best_of", 3 if fmt_local=="best_of_3" else (1 if fmt_local=="one_set" else 5))
-        n_min=best_of//2 + 1 if best_of>1 else 1; n_max=best_of
-        title=f"**{match['label']}** — {match['a']} vs {match['b']}"
+        n_min=best_of//2 + 1 if best_of>1 else 1
+        n_max=best_of
+
         cur_sets=match.get("sets",[])
+        title=f"**{match['label']}** — {match['a']} vs {match['b']}"
         if cur_sets and match_has_winner(cur_sets):
             stats_now=compute_sets_stats(cur_sets)
             winner=match['a'] if stats_now["sets1"]>stats_now["sets2"] else match['b']
-            title+=f"  <span style='display:inline-block;padding:2px 6px;border-radius:6px;background:#e8f5e9;color:#1b5e20;font-weight:600;margin-left:8px;'>🏆 {winner}</span>"
+            title+=(
+                "  <span style='display:inline-block;padding:2px 6px;border-radius:6px;"
+                "background:#e8f5e9;color:#1b5e20;font-weight:600;margin-left:8px;'>"
+                f"🏆 {winner}</span>"
+            )
         else:
             title+="  <span style='color:#999'>(A definir)</span>"
         st.markdown(title, unsafe_allow_html=True)
@@ -873,34 +883,57 @@ def tournament_manager(user:Dict[str,Any], tid:str):
         with st.form(form_key):
             cN,_,_=st.columns([1,1,1])
             with cN:
-                n_sets=st.number_input("Sets jugados", min_value=n_min, max_value=n_max,
-                    value=min(max(len(cur_sets),n_min),n_max), key=ko_widget_key(tid_,mid,"ko_ns"))
+                n_sets=st.number_input(
+                    "Sets jugados",
+                    min_value=n_min, max_value=n_max,
+                    value=min(max(len(cur_sets),n_min),n_max),
+                    key=ko_widget_key(tid_,mid,"ko_ns")
+                )
+
             new_sets=[]
             for si in range(n_sets):
                 cA,cB,_=st.columns([1,1,1])
                 with cA:
                     s1_val=int(cur_sets[si]["s1"]) if si<len(cur_sets) and "s1" in cur_sets[si] else 0
-                    s1=st.number_input(f"Set {si+1} — {match['a']}",0,20,s1_val, key=ko_widget_key(tid_,mid,f"ko_s{si+1}_a"))
+                    s1=st.number_input(
+                        f"Set {si+1} — {match['a']}",0,20,s1_val,
+                        key=ko_widget_key(tid_,mid,f"ko_s{si+1}_a")
+                    )
                 with cB:
                     s2_val=int(cur_sets[si]["s2"]) if si<len(cur_sets) and "s2" in cur_sets[si] else 0
-                    s2=st.number_input(f"Set {si+1} — {match['b']}",0,20,s2_val, key=ko_widget_key(tid_,mid,f"ko_s{si+1}_b"))
+                    s2=st.number_input(
+                        f"Set {si+1} — {match['b']}",0,20,s2_val,
+                        key=ko_widget_key(tid_,mid,f"ko_s{si+1}_b")
+                    )
                 new_sets.append({"s1":int(s1),"s2":int(s2)})
+
             ok,msg=validate_sets(fmt_local,new_sets)
             if not ok: st.error(msg)
+
             gC,gD,_=st.columns([1,1,1])
-            with gC: g1=st.number_input(f"Puntos de oro {match['a']}",0,200,int(match.get("goldenA",0)), key=ko_widget_key(tid_,mid,"ko_g1"))
-            with gD: g2=st.number_input(f"Puntos de oro {match['b']}",0,200,int(match.get("goldenB",0)), key=ko_widget_key(tid_,mid,"ko_g2"))
+            with gC:
+                g1=st.number_input(
+                    f"Puntos de oro {match['a']}",0,200,int(match.get("goldenA",0)),
+                    key=ko_widget_key(tid_,mid,"ko_g1")
+                )
+            with gD:
+                g2=st.number_input(
+                    f"Puntos de oro {match['b']}",0,200,int(match.get("goldenB",0)),
+                    key=ko_widget_key(tid_,mid,"ko_g2")
+                )
+
             submitted=st.form_submit_button("Guardar este partido KO")
             if submitted:
                 stats=compute_sets_stats(new_sets)
                 if stats["sets1"]==stats["sets2"]:
-                    rr=random.Random(int(tourn_state["config"].get("seed",42))+int(hashlib.md5(mid.encode()).hexdigest(),16)%1000)
-                    winner_rand=rr.choice([match['a'],match['b']])
-                    st.warning(f"Empate en sets → sorteo automático: **{winner_rand}**")
+                    st.error("Debe haber un ganador en KO (no se permiten empates). Ajusta los sets.")
+                    return
                 match["sets"]=new_sets; match["goldenA"]=int(g1); match["goldenB"]=int(g2)
                 save_tournament(tid_,tourn_state)
                 st.session_state.last_hash=compute_state_hash(tourn_state); st.session_state.autosave_last_ts=time.time()
-                st.toast("✔ Partido KO guardado", icon="✅")
+                st.success("✔ Partido KO guardado")
+                st.toast("KO guardado", icon="✅")
+                st.rerun()  # ← fuerza el refresco para mostrar trofeo y activar progresión
 
     def render_playoff_round(tid_:str, round_name:str, matches:list, tourn_state:dict):
         for m in matches:
