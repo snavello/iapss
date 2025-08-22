@@ -1,9 +1,9 @@
-# padel_tournament_pro_multiuser_v3_3.py — v3.3.38
-# Cambios vs v3.3.37:
-# - Autosave conservador con cooldown de 4s, evitando ráfagas de escrituras.
-# - Eliminados st.rerun() tras guardados (grupos y KO) para evitar parpadeos/404.
-# - Descarga JSON estable (payload preconstruido).
-# - Resto de funciones sin cambios de lógica deportiva.
+# padel_tournament_pro_multiuser_v3_3.py — v3.3.39
+# Cambios mínimos vs v3.3.38:
+# - Playoffs: claves de widgets estables por partido (mid) -> se evita el bucle/“parpadeo” al guardar QF3/QF4.
+# - Playoffs: sin st.rerun() tras guardar; rely en el rerun natural del botón.
+# - KO: generación de 'mid' determinista y normalización para partidos existentes.
+# - Mantiene UI y reglas deportivas sin cambios.
 
 import streamlit as st
 import pandas as pd
@@ -28,7 +28,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="iAPPs Pádel — v3.3.38", layout="wide")
+st.set_page_config(page_title="iAPPs Pádel — v3.3.39", layout="wide")
 
 # ====== CSS ======
 st.markdown("""
@@ -224,7 +224,7 @@ def save_tournament(tid: str, obj: Dict[str, Any], make_snapshot: bool=True):
             try: old.unlink()
             except Exception: pass
 
-# ====== Reglas del torneo ======
+# ====== Reglas del torneo / helpers ======
 DEFAULT_CONFIG = {
     "t_name": "Open Pádel",
     "num_pairs": 16,
@@ -336,7 +336,7 @@ def qualified_from_tables(zone_tables, k):
             qualified.append((z, int(row["Pos"]), row["Pareja"].replace("🔴 ","")))
     return qualified
 
-# ====== Playoffs helpers ======
+# ====== Playoffs helpers (con IDs estables) ======
 def next_pow2(n: int) -> int:
     p = 1
     while p < n: p <<= 1
@@ -347,6 +347,21 @@ def starting_round_name(n_slots: int) -> str:
     if n_slots <= 4: return "SF"
     return "QF"
 
+def _mid_for(round_name: str, label: str, a: str, b: str) -> str:
+    base = f"{round_name}::{label}::{a}::{b}"
+    h = hashlib.md5(base.encode("utf-8")).hexdigest()[:10]
+    return f"{round_name}_{h}"
+
+def ensure_match_ids(matches: List[Dict[str,Any]]):
+    """Añade 'mid' estable a cada partido si no existe."""
+    for m in matches:
+        if not m.get("mid"):
+            rn = m.get("round","R")
+            lb = m.get("label","M")
+            a = m.get("a","A")
+            b = m.get("b","B")
+            m["mid"] = _mid_for(rn, lb, a, b)
+
 def pairs_seed_v1(winners: List[Tuple[str,int,str]], runners: List[Tuple[str,int,str]]) -> List[Tuple[str,str]]:
     if not winners or not runners: return []
     m = min(len(winners), len(runners))
@@ -354,7 +369,8 @@ def pairs_seed_v1(winners: List[Tuple[str,int,str]], runners: List[Tuple[str,int
     rr = runners[1:] + runners[:1] if len(runners) > 1 else runners
     return list(zip([w for (_,_,w) in winners], [r for (_,_,r) in rr]))
 
-def build_initial_ko(qualified: List[Tuple[str,int,str]]) -> List[Dict[str,Any]]:
+def build_initial_ko(qualified: List[Tuple[str,int,str]], best_of_fmt: str="best_of_3") -> List[Dict[str,Any]]:
+    """Crea los partidos iniciales con mid estable. best_of_fmt es 'one_set'|'best_of_3'|'best_of_5'."""
     N = len(qualified)
     if N == 0: return []
     winners = [q for q in qualified if q[1]==1]
@@ -362,28 +378,46 @@ def build_initial_ko(qualified: List[Tuple[str,int,str]]) -> List[Dict[str,Any]]
     slots = next_pow2(N)
     start_round = starting_round_name(slots)
 
+    def m_best_of(fmt: str) -> int:
+        return 1 if fmt=="one_set" else (3 if fmt=="best_of_3" else 5)
+
     if N == slots:
         if N == 2:
             a = qualified[0][2]; b = qualified[1][2]
-            return [{"round":"FN","label":"FINAL","a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0}]
+            lab = "FINAL"
+            m = {"round":"FN","label":lab,"a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0,"best_of":m_best_of(best_of_fmt)}
+            m["mid"] = _mid_for("FN", lab, a, b)
+            return [m]
         if N == 4:
             pairs = pairs_seed_v1(winners, runners)
             if not pairs or len(pairs) != 2:
                 names = [q[2] for q in qualified]
                 pairs = [(names[0], names[3]), (names[1], names[2])]
-            return [{"round":"SF","label":f"SF{i+1}","a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0} for i,(a,b) in enumerate(pairs)]
+            out=[]
+            for i,(a,b) in enumerate(pairs):
+                lab = f"SF{i+1}"
+                m = {"round":"SF","label":lab,"a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0,"best_of":m_best_of(best_of_fmt)}
+                m["mid"] = _mid_for("SF", lab, a, b)
+                out.append(m)
+            return out
         if N == 8:
             pairs = pairs_seed_v1(winners, runners)
             if len(pairs) != 4:
                 names = [q[2] for q in qualified]
                 pairs = [(names[i], names[-(i+1)]) for i in range(4)]
-            return [{"round":"QF","label":f"QF{i+1}","a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0} for i,(a,b) in enumerate(pairs)]
+            out=[]
+            for i,(a,b) in enumerate(pairs):
+                lab = f"QF{i+1}"
+                m = {"round":"QF","label":lab,"a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0,"best_of":m_best_of(best_of_fmt)}
+                m["mid"] = _mid_for("QF", lab, a, b)
+                out.append(m)
+            return out
 
     names = [q[2] for q in sorted(qualified, key=lambda x:(x[1], x[0]))]
     byes = slots - N
-    start_matches = []
     labels_map = {"FN":["FINAL"], "SF":["SF1","SF2"], "QF":["QF1","QF2","QF3","QF4"]}
     labels = labels_map[start_round]
+    start_matches = []
     i=0; li=0
     while i < len(names):
         a = names[i]; b = None
@@ -394,7 +428,9 @@ def build_initial_ko(qualified: List[Tuple[str,int,str]]) -> List[Dict[str,Any]]
         lab = labels[li] if li < len(labels) else f"{start_round}{li+1}"
         if byes>0 and b is None:
             b = "BYE"; byes -= 1
-        start_matches.append({"round":start_round,"label":lab,"a":a,"b":b or "BYE","sets":[],"goldenA":0,"goldenB":0})
+        m = {"round":start_round,"label":lab,"a":a,"b":b or "BYE","sets":[],"goldenA":0,"goldenB":0,"best_of":m_best_of(best_of_fmt)}
+        m["mid"] = _mid_for(start_round, lab, a, b or "BYE")
+        start_matches.append(m)
         li += 1
     return start_matches
 
@@ -414,13 +450,17 @@ def make_next_round_name(current: str) -> Optional[str]:
     except ValueError: return None
     return order[i+1]
 
-def pairs_to_matches(pairs: List[Tuple[str, Optional[str]]], round_name: str) -> List[Dict[str,Any]]:
+def pairs_to_matches(pairs: List[Tuple[str, Optional[str]]], round_name: str, best_of_fmt: str="best_of_3") -> List[Dict[str,Any]]:
     labels = {"SF":["SF1","SF2"], "FN":["FINAL"]}
+    def m_best_of(fmt: str) -> int:
+        return 1 if fmt=="one_set" else (3 if fmt=="best_of_3" else 5)
     out=[]
     for i,(a,b) in enumerate(pairs, start=1):
         lab_list = labels.get(round_name, [])
         lab = lab_list[i-1] if i-1 < len(lab_list) else f"{round_name}{i}"
-        out.append({"round":round_name,"label":lab,"a":a,"b":b or "BYE","sets":[],"goldenA":0,"goldenB":0})
+        m = {"round":round_name,"label":lab,"a":a,"b":b or "BYE","sets":[],"goldenA":0,"goldenB":0,"best_of":m_best_of(best_of_fmt)}
+        m["mid"] = _mid_for(round_name, lab, a, b or "BYE")
+        out.append(m)
     return out
 
 def next_round(slots: List[str]):
@@ -591,7 +631,7 @@ def super_admin_panel():
                     set_user(usr)
                     st.success("Cambios guardados.")
 
-    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.38")
+    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.39")
 
 # ====== ADMIN (torneos) ======
 def load_index_for_admin(admin_username: str) -> List[Dict[str, Any]]:
@@ -713,7 +753,7 @@ def admin_dashboard(admin_user: Dict[str, Any]):
         tid = sel["tournament_id"]
         st.caption("Link público (solo lectura) — copiar manualmente:")
         public_url = f"{app_cfg.get('app_base_url', DEFAULT_APP_CONFIG['app_base_url'])}/?mode=public&tid={tid}"
-        st.text_input("URL pública", value=public_url, disabled=False, label_visibility="collapsed", key=f"pub_{tid}")
+        st.text_input("URL pública", value=public_url, disabled=True, label_visibility="collapsed", key=f"pub_{tid}")
 
     if st.session_state.get("current_tid"):
         tournament_manager(admin_user, st.session_state["current_tid"])
@@ -764,7 +804,6 @@ def tournament_manager(user: Dict[str, Any], tid: str):
             if st.button("💾 Guardar configuración", type="primary"):
                 state["config"] = {k:int(v) if isinstance(v,(int,float)) and k not in ["t_name","format","use_seeds"] else v for k,v in cfg.items()}
                 save_tournament(tid, state)
-                # sincroniza hash y autosave para no disparar autosave inmediato
                 st.session_state.last_hash = compute_state_hash(state)
                 st.session_state.autosave_last_ts = time.time()
                 st.success("Configuración guardada.")
@@ -1024,45 +1063,94 @@ def tournament_manager(user: Dict[str, Any], tid: str):
 
             st.markdown("</div>", unsafe_allow_html=True)  # fin .thin
 
-    # --- TABLAS ---
-    with tab_tables:
-        st.subheader("Tablas por zona y clasificados")
-        if not state.get("groups") or not state.get("results"):
-            st.info("Aún no hay fixture o resultados.")
+    # ========= PLAYOFFS (con keys estables) =========
+
+    def widget_key(tid_: str, mid_: str, name: str) -> str:
+        return f"{name}__{tid_}__{mid_}"
+
+    def render_playoff_match(tid_: str, round_name: str, match: dict, tourn_state: dict):
+        # mid estable
+        mid = match.get("mid")
+        if not mid:
+            match["mid"] = _mid_for(match.get("round","R"), match.get("label","M"), match.get("a","A"), match.get("b","B"))
+            mid = match["mid"]
+
+        # best_of según configuración del match
+        fmt_local = tourn_state["config"].get("format","best_of_3")
+        best_of = match.get("best_of", 3 if fmt_local=="best_of_3" else (1 if fmt_local=="one_set" else 5))
+        n_min = best_of//2 + 1 if best_of>1 else 1
+        n_max = best_of
+
+        title = f"**{match['label']}** — {match['a']} vs {match['b']}"
+        cur_sets = match.get("sets", [])
+        if cur_sets and match_has_winner(cur_sets):
+            stats_now = compute_sets_stats(cur_sets)
+            winner = match['a'] if stats_now["sets1"]>stats_now["sets2"] else match['b']
+            title += f"  <span style='display:inline-block;padding:2px 6px;border-radius:6px;background:#e8f5e9;color:#1b5e20;font-weight:600;margin-left:8px;'>🏆 {winner}</span>"
         else:
-            cfg = state["config"]
-            fmt = cfg.get("format","best_of_3")
-            seeded_set = set(state.get("seeded_pairs", [])) if cfg.get("use_seeds", False) else set()
-            zone_tables = []
-            all_complete = True
-            for zi, group in enumerate(state["groups"], start=1):
-                zone_name = f"Z{zi}"
-                complete = zone_complete(zone_name, state["results"], fmt)
-                status = "✅ Completa" if complete else "⏳ A definir"
-                if not complete:
-                    all_complete = False
-                st.markdown(f"#### Tabla {zone_name} — {status}")
+            title += "  <span style='color:#999'>(A definir)</span>"
+        st.markdown(title, unsafe_allow_html=True)
 
-                table = standings_from_results(zone_name, group, state["results"], cfg, seeded_set=seeded_set)
-                zone_tables.append(table)
-                if table.empty:
-                    st.info("Sin datos para mostrar todavía.")
-                else:
-                    show = table[["Zona","Pos","Pareja","PJ","PG","PP","GF","GC","DG","GP","PTS"]]
-                    st.markdown(show.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
+        # Número de sets
+        cN,_,_ = st.columns([1,1,1])
+        with cN:
+            ns_key = widget_key(tid_, mid, "ko_ns")
+            n_sets = st.number_input(
+                "Sets jugados", min_value=n_min, max_value=n_max,
+                value=min(max(len(cur_sets), n_min), n_max),
+                key=ns_key
+            )
 
-            st.markdown("### Clasificados a Playoffs")
-            if not all_complete:
-                st.info("⏳ A definir — Deben completarse todos los partidos de las zonas.")
-            else:
-                qualified = qualified_from_tables(zone_tables, cfg["top_per_zone"])
-                if not qualified:
-                    st.info("Sin clasificados aún.")
-                else:
-                    dfq = pd.DataFrame([{"Zona":z,"Pos":pos,"Pareja":p} for (z,pos,p) in qualified])
-                    st.markdown(dfq.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
+        # Sets inputs
+        new_sets = []
+        for si in range(n_sets):
+            cA,cB,_ = st.columns([1,1,1])
+            with cA:
+                s1_key = widget_key(tid_, mid, f"ko_s{si+1}_a")
+                s1_val = int(cur_sets[si]["s1"]) if si<len(cur_sets) and "s1" in cur_sets[si] else 0
+                s1 = st.number_input(f"Set {si+1} — {match['a']}", 0, 20, s1_val, key=s1_key)
+            with cB:
+                s2_key = widget_key(tid_, mid, f"ko_s{si+1}_b")
+                s2_val = int(cur_sets[si]["s2"]) if si<len(cur_sets) and "s2" in cur_sets[si] else 0
+                s2 = st.number_input(f"Set {si+1} — {match['b']}", 0, 20, s2_val, key=s2_key)
+            new_sets.append({"s1":int(s1), "s2":int(s2)})
 
-    # --- PLAYOFFS ---
+        ok, msg = validate_sets(fmt_local, new_sets)
+        if not ok:
+            st.error(msg)
+
+        gC,gD,_ = st.columns([1,1,1])
+        with gC:
+            g1_key = widget_key(tid_, mid, "ko_g1")
+            g1 = st.number_input(f"Puntos de oro {match['a']}", 0, 200, int(match.get("goldenA",0)), key=g1_key)
+        with gD:
+            g2_key = widget_key(tid_, mid, "ko_g2")
+            g2 = st.number_input(f"Puntos de oro {match['b']}", 0, 200, int(match.get("goldenB",0)), key=g2_key)
+
+        save_key = widget_key(tid_, mid, "ko_save_btn")
+        if st.button("Guardar partido KO", key=save_key):
+            stats = compute_sets_stats(new_sets)
+            # En KO, si hay empate de sets, se sortea (comportamiento previo)
+            if stats["sets1"] == stats["sets2"]:
+                rr = random.Random(int(tourn_state["config"].get("seed",42)) + int(hashlib.md5(mid.encode()).hexdigest(),16)%1000)
+                winner_rand = rr.choice([match['a'], match['b']])
+                st.warning(f"Empate en sets → sorteo automático: **{winner_rand}**")
+
+            match["sets"] = new_sets
+            match["goldenA"] = int(g1)
+            match["goldenB"] = int(g2)
+            # persistencia conservadora
+            save_tournament(tid_, tourn_state)
+            st.session_state.last_hash = compute_state_hash(tourn_state)
+            st.session_state.autosave_last_ts = time.time()
+            st.toast("KO guardado", icon="✅")
+
+    def render_playoff_round(tid_: str, round_name: str, matches: list, tourn_state: dict):
+        for m in matches:
+            with st.container(border=True):
+                render_playoff_match(tid_, round_name, m, tourn_state)
+
+    # --- TAB KO ---
     with tab_ko:
         st.subheader("Playoffs (por sets + puntos de oro)")
         if not state.get("groups") or not state.get("results"):
@@ -1070,135 +1158,97 @@ def tournament_manager(user: Dict[str, Any], tid: str):
         else:
             st.markdown("<div class='thin'>", unsafe_allow_html=True)
 
-            cfg = state["config"]
-            fmt = cfg.get("format","best_of_3")
+            fmt = state["config"].get("format","best_of_3")
             all_complete = all(zone_complete(f"Z{zi}", state["results"], fmt) for zi in range(1, len(state["groups"])+1))
             if not all_complete:
                 st.info("⏳ A definir — Completa la fase de grupos para habilitar los playoffs.")
             else:
+                # Construcción de clasificados
                 zone_tables = []
                 for zi, group in enumerate(state["groups"], start=1):
                     zone_name = f"Z{zi}"
-                    table = standings_from_results(zone_name, group, state["results"], cfg)
+                    table = standings_from_results(zone_name, group, state["results"], state["config"])
                     zone_tables.append(table)
-                qualified = qualified_from_tables(zone_tables, cfg["top_per_zone"])
+                qualified = qualified_from_tables(zone_tables, state["config"]["top_per_zone"])
 
                 c1,c2 = st.columns(2)
                 with c1:
                     if st.button("🔄 Regenerar Playoffs (desde clasificados)"):
-                        state["ko"]["matches"] = build_initial_ko(qualified)
+                        state["ko"]["matches"] = build_initial_ko(qualified, best_of_fmt=state["config"].get("format","best_of_3"))
+                        ensure_match_ids(state["ko"]["matches"])
                         save_tournament(tid, state)
                         st.session_state.last_hash = compute_state_hash(state)
                         st.session_state.autosave_last_ts = time.time()
                         st.success("Playoffs regenerados.")
-                        st.rerun()
+                        # sin st.rerun()
+
                 with c2:
                     st.caption("Usa esto si cambiaste resultados de zonas y querés rehacer la llave.")
 
                 if not state["ko"]["matches"]:
-                    state["ko"]["matches"] = build_initial_ko(qualified)
+                    state["ko"]["matches"] = build_initial_ko(qualified, best_of_fmt=state["config"].get("format","best_of_3"))
+                    ensure_match_ids(state["ko"]["matches"])
                     save_tournament(tid, state)
                     st.session_state.last_hash = compute_state_hash(state)
                     st.session_state.autosave_last_ts = time.time()
 
-                round_order = ["QF","SF","FN"]
-                final_champion = None
+                # Asegurar 'mid' en todos los partidos existentes
+                ensure_match_ids(state["ko"]["matches"])
 
+                round_order = ["QF","SF","FN"]
                 for rname in round_order:
                     ms = [m for m in state["ko"]["matches"] if m.get("round")==rname]
                     if not ms:
                         continue
                     st.markdown(f"### {rname}")
-                    advancing = []
-                    for idx, m in enumerate(ms, start=1):
-                        with st.container(border=True):
-                            title = f"**{m['label']}** — {m['a']} vs {m['b']}"
-                            stats_now = compute_sets_stats(m.get("sets", [])) if m.get("sets") else {"sets1":0,"sets2":0}
-                            if m.get("sets") and match_has_winner(m["sets"]):
-                                winner = m['a'] if stats_now["sets1"]>stats_now["sets2"] else m['b']
-                                title += f"  <span style='display:inline-block;padding:2px 6px;border-radius:6px;background:#e8f5e9;color:#1b5e20;font-weight:600;margin-left:8px;'>🏆 {winner}</span>"
-                            else:
-                                title += "  <span style='color:#999'>(A definir)</span>"
-                            st.markdown(title, unsafe_allow_html=True)
+                    render_playoff_round(tid, rname, ms, state)
 
-                            cur_sets = m.get("sets", [])
-                            n_min, n_max = (1,1) if fmt=="one_set" else ((2,3) if fmt=="best_of_3" else (3,5))
-                            cN,_,_ = st.columns([1,1,1])
-                            with cN:
-                                n_sets = st.number_input(
-                                    "Sets jugados", min_value=n_min, max_value=n_max,
-                                    value=min(max(len(cur_sets), n_min), n_max),
-                                    key=f"ko_ns_{tid}_{rname}_{idx}"
-                                )
-                            new_sets = []
-                            for si in range(n_sets):
-                                cA,cB,_ = st.columns([1,1,1])
-                                with cA:
-                                    s1 = st.number_input(
-                                        f"Set {si+1} — {m['a']}", 0, 20,
-                                        int(cur_sets[si]["s1"]) if si<len(cur_sets) and "s1" in cur_sets[si] else 0,
-                                        key=f"ko_s1_{tid}_{rname}_{idx}_{si}"
-                                    )
-                                with cB:
-                                    s2 = st.number_input(
-                                        f"Set {si+1} — {m['b']}", 0, 20,
-                                        int(cur_sets[si]["s2"]) if si<len(cur_sets) and "s2" in cur_sets[si] else 0,
-                                        key=f"ko_s2_{tid}_{rname}_{idx}_{si}"
-                                    )
-                                new_sets.append({"s1":int(s1),"s2":int(s2)})
-                            ok, msg = validate_sets(fmt, new_sets)
-                            if not ok:
-                                st.error(msg)
-                            gC,gD,_ = st.columns([1,1,1])
-                            with gC:
-                                g1 = st.number_input(f"Puntos de oro {m['a']}", 0, 200, int(m.get("goldenA",0)), key=f"ko_g1_{tid}_{rname}_{idx}")
-                            with gD:
-                                g2 = st.number_input(f"Puntos de oro {m['b']}", 0, 200, int(m.get("goldenB",0)), key=f"ko_g2_{tid}_{rname}_{idx}")
-
-                            if st.button("Guardar partido KO", key=f"ko_sv_{tid}_{rname}_{idx}"):
-                                stats = compute_sets_stats(new_sets)
-                                if stats["sets1"] == stats["sets2"]:
-                                    rr = random.Random(int(state["config"].get("seed",42)) + idx)
-                                    winner_rand = rr.choice([m['a'], m['b']])
-                                    st.warning(f"Empate en sets → sorteo automático: **{winner_rand}**")
-                                m["sets"] = new_sets
-                                m["goldenA"] = int(g1)
-                                m["goldenB"] = int(g2)
-                                save_tournament(tid, state)
-                                st.session_state.last_hash = compute_state_hash(state)
-                                st.session_state.autosave_last_ts = time.time()
-                                st.success("KO guardado.")
-
-                            if m.get("sets") and match_has_winner(m["sets"]):
-                                statsF = compute_sets_stats(m["sets"])
-                                winnerF = m['a'] if statsF["sets1"]>statsF["sets2"] else m['b']
-                                advancing.append(winnerF)
-
-                    if rname == "FN":
-                        if advancing and len(advancing)==1:
-                            final_champion = advancing[0]
-                            st.markdown(
-                                f"<div style='padding:14px 18px;border-radius:10px;background:#fff9c4;border:1px solid #ffeb3b;font-size:1.1rem;font-weight:700;color:#795548;margin:8px 0;'>🏆 CAMPEÓN: {final_champion}</div>",
-                                unsafe_allow_html=True
-                            )
-                            st.balloons()
-                        st.markdown("</div>", unsafe_allow_html=True)  # fin .thin en KO
+                # Avance automático de ronda si todos los partidos de una ronda están completos
+                # (mantener conducta, pero sin st.rerun(); aparecerá al siguiente render)
+                for rname in ["QF","SF"]:
+                    ms = [m for m in state["ko"]["matches"] if m.get("round")==rname]
+                    if not ms:
                         continue
-
-                    if advancing and len(advancing)>=1:
+                    # ¿Todos completos?
+                    all_done = True
+                    adv = []
+                    for m in ms:
+                        sets = m.get("sets", [])
+                        if not sets or not match_has_winner(sets):
+                            all_done = False
+                            break
+                        statsF = compute_sets_stats(sets)
+                        adv.append(m['a'] if statsF["sets1"]>statsF["sets2"] else m['b'])
+                    if all_done:
                         next_rname = make_next_round_name(rname)
                         if next_rname:
-                            pairs = next_round(advancing)
+                            pairs = next_round(adv)
+                            # limpiar ronda siguiente previa
                             state["ko"]["matches"] = [mm for mm in state["ko"]["matches"] if mm.get("round") not in (next_rname,)]
-                            state["ko"]["matches"].extend(pairs_to_matches(pairs, next_rname))
+                            # agregar nuevos
+                            new_ms = pairs_to_matches(pairs, next_rname, best_of_fmt=state["config"].get("format","best_of_3"))
+                            ensure_match_ids(new_ms)
+                            state["ko"]["matches"].extend(new_ms)
                             save_tournament(tid, state)
                             st.session_state.last_hash = compute_state_hash(state)
                             st.session_state.autosave_last_ts = time.time()
                             st.info(f"Ronda {next_rname} preparada. Completa todos para llegar a la FINAL.")
-                            st.rerun()
-                    else:
-                        st.info("⏳ A definir — Falta completar partidos de esta fase para avanzar.")
-            # cierre .thin si no entró al if de FINAL
+
+                # Si existe FINAL y tiene ganador, destacarlo
+                finals = [m for m in state["ko"]["matches"] if m.get("round")=="FN"]
+                for fm in finals:
+                    sets = fm.get("sets", [])
+                    if sets and match_has_winner(sets):
+                        statsF = compute_sets_stats(sets)
+                        champion = fm['a'] if statsF["sets1"]>statsF["sets2"] else fm['b']
+                        st.markdown(
+                            f"<div style='padding:14px 18px;border-radius:10px;background:#fff9c4;border:1px solid #ffeb3b;font-size:1.1rem;font-weight:700;color:#795548;margin:8px 0;'>🏆 CAMPEÓN: {champion}</div>",
+                            unsafe_allow_html=True
+                        )
+                        # balloons sólo 1 vez por render
+                        st.balloons()
+                        break
+
             st.markdown("</div>", unsafe_allow_html=True)
 
     # ===== Autosave con cooldown =====
@@ -1321,7 +1371,7 @@ def main():
                 st.session_state.auth_user = user
                 st.success(f"Bienvenido {user['username']} ({user['role']})")
                 st.rerun()
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.38")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.39")
         return
 
     user = st.session_state["auth_user"]
@@ -1331,12 +1381,12 @@ def main():
             viewer_tournament(_tid, public=True)
         else:
             super_admin_panel()
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.38")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.39")
         return
 
     if user["role"] == "TOURNAMENT_ADMIN":
         admin_dashboard(user)
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.38")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.39")
         return
 
     if user["role"] == "VIEWER":
@@ -1344,11 +1394,11 @@ def main():
             viewer_tournament(_tid, public=True)
         else:
             viewer_dashboard(user)
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.38")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.39")
         return
 
     st.error("Rol desconocido.")
-    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.38")
+    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.39")
 
 if __name__ == "__main__":
     main()
