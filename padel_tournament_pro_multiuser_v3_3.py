@@ -846,8 +846,9 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                 if table.empty: st.info("Sin datos para mostrar todavía.")
                 else:
                     show=table[["Zona","Pos","Pareja","PJ","PG","PP","GF","GC","DG","GP","PTS"]]
-                    st.markdown(show.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)# --- PLAYOFFS ---
-    def ko_widget_key(tid_:str, mid_:str, name:str)->str:
+                    st.markdown(show.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
+                    # --- PLAYOFFS ---
+                    def ko_widget_key(tid_:str, mid_:str, name:str)->str:
         return f"{name}__{tid_}__{mid_}"
 
     def render_playoff_match(tid_:str, match:dict, tourn_state:dict):
