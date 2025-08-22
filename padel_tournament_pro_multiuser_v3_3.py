@@ -256,7 +256,7 @@ def qualified_from_tables(zone_tables,k):
     for table in zone_tables:
         if table.empty: continue
         z=table.iloc[0]["Zona"]; q=table.head(int(k))
-        for_,row in q.iterrows():
+        for _,row in q.iterrows():
             qualified.append((z,int(row["Pos"]),row["Pareja"].replace("🔴 ","")))
     return qualified
 
