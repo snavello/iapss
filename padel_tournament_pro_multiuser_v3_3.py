@@ -1,11 +1,11 @@
-# padel_tournament_pro_multiuser_v3_3.py — v3.3.46
-# Correcciones:
-# - Descargas JSON via st.download_button (sin /media).
-# - Restaurar JSON directa (sin objetos efímeros).
-# - KO: guardado atómico + verificación; sin pisar otros partidos.
-# - Tablas se actualizan tras guardar partidos (st.rerun()).
-# - Logo por URL RAW con fallback SVG; barra superior sticky.
-# - Link público visible en text_input (enabled).
+# padel_tournament_pro_multiuser_v3_3_47.py — v3.3.47
+# Cambios clave vs v3.3.46:
+# - KO robusto multironda: R32 → R16 → QF → SF → FN.
+# - NUNCA se sobreescribe una ronda si ya existe (evita perder SF1 al cargar SF2, etc.).
+# - La siguiente ronda se crea SOLO cuando la anterior está COMPLETA y la siguiente aún NO existe.
+# - Descarga/Restauración seguras (sin media files efímeros).
+# - Guardados atómicos; tablas se refrescan tras guardar.
+# - Logo por URL RAW (cache) con fallback SVG; barra superior sticky.
 
 import streamlit as st
 import pandas as pd
@@ -118,10 +118,10 @@ def render_header_bar(user_name:str="", role:str="", logo_url:str=""):
 # ====== Usuarios y auth ======
 DEFAULT_SUPER={
     "username":"ADMIN",
-    "pin_hash": sha("199601"),
+    "pin_hash": hashlib.sha256("199601".encode("utf-8")).hexdigest(),
     "role":"SUPER_ADMIN",
     "assigned_admin":None,
-    "created_at": now_iso(),
+    "created_at": datetime.now().isoformat(),
     "active": True
 }
 
@@ -157,42 +157,6 @@ def load_tournament(tid:str)->Dict[str,Any]:
     if not p.exists(): return {}
     return json.loads(p.read_text(encoding="utf-8"))
 
-def save_tournament(tid:str, obj:Dict[str,Any], make_snapshot:bool=True):
-    p=tourn_path(tid)
-    p.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
-    if make_snapshot:
-        sd=snap_dir_for(tid); ts=datetime.now().strftime("%Y%m%d_%H%M%S")
-        (sd/f"snapshot_{ts}.json").write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
-        snaps=sorted([x for x in sd.glob("snapshot_*.json")], reverse=True)
-        for old in snaps[KEEP_SNAPSHOTS:]:
-            try: old.unlink()
-            except Exception: pass
-
-# ====== I/O atómico con lock por torneo (para KO) ======
-def _lock_path_for(tid: str) -> Path:
-    return TOURN_DIR / f"{tid}.lock"
-
-def _acquire_lock(tid: str, timeout: float = 3.0, sleep: float = 0.05) -> bool:
-    lp = _lock_path_for(tid)
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            fd = os.open(str(lp), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            with os.fdopen(fd, "w") as f:
-                f.write(f"pid={os.getpid()} ts={time.time()}")
-            return True
-        except FileExistsError:
-            time.sleep(sleep)
-    return False
-
-def _release_lock(tid: str):
-    lp = _lock_path_for(tid)
-    try:
-        if lp.exists():
-            lp.unlink()
-    except Exception:
-        pass
-
 def _save_json_atomic(path: Path, data: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", delete=False, dir=str(path.parent), encoding="utf-8") as tf:
@@ -200,23 +164,18 @@ def _save_json_atomic(path: Path, data: dict):
         tmp_name = tf.name
     os.replace(tmp_name, str(path))
 
-def save_tournament_atomic(tid: str, obj: Dict[str, Any], make_snapshot: bool = True):
-    ok = _acquire_lock(tid)
-    try:
-        p = tourn_path(tid)
-        _save_json_atomic(p, obj)
-        if make_snapshot:
-            sd = snap_dir_for(tid)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            _save_json_atomic(sd / f"snapshot_{ts}.json", obj)
-            snaps = sorted([x for x in sd.glob("snapshot_*.json")], reverse=True)
-            for old in snaps[KEEP_SNAPSHOTS:]:
-                try: old.unlink()
-                except Exception: pass
-    finally:
-        if ok: _release_lock(tid)
+def save_tournament(tid:str, obj:Dict[str,Any], make_snapshot:bool=True):
+    p=tourn_path(tid)
+    _save_json_atomic(p, obj)
+    if make_snapshot:
+        sd=snap_dir_for(tid); ts=datetime.now().strftime("%Y%m%d_%H%M%S")
+        _save_json_atomic(sd/f"snapshot_{ts}.json", obj)
+        snaps=sorted([x for x in sd.glob("snapshot_*.json")], reverse=True)
+        for old in snaps[KEEP_SNAPSHOTS:]:
+            try: old.unlink()
+            except Exception: pass
 
-# ====== Helpers torneo ======
+# ====== Helpers ======
 DEFAULT_CONFIG = {
     "t_name":"Open Pádel",
     "num_pairs":16,
@@ -228,7 +187,6 @@ DEFAULT_CONFIG = {
     "format":"best_of_3",
     "use_seeds":False
 }
-
 rng = lambda off,seed: random.Random(int(seed)+int(off))
 
 def rr_schedule(group:List[str])->List[Tuple[str,str]]:
@@ -321,10 +279,14 @@ def next_pow2(n:int)->int:
     while p<n: p<<=1
     return p
 
-def starting_round_name(n_slots:int)->str:
-    if n_slots<=2: return "FN"
-    if n_slots<=4: return "SF"
-    return "QF"
+def starting_round_name_for(n:int)->str:
+    # Dado el número de clasificados N, devuelve la ronda de inicio
+    # más cercana hacia arriba a potencias de 2: 2->FN, 4->SF, 8->QF, 16->R16, 32->R32
+    if n<=2: return "FN"
+    if n<=4: return "SF"
+    if n<=8: return "QF"
+    if n<=16: return "R16"
+    return "R32"
 
 def _mid_for(round_name:str,label:str,a:str,b:str)->str:
     base=f"{round_name}::{label}::{a}::{b}"
@@ -337,59 +299,40 @@ def ensure_match_ids(matches:List[Dict[str,Any]]):
             rn=m.get("round","R"); lb=m.get("label","M"); a=m.get("a","A"); b=m.get("b","B")
             m["mid"]=_mid_for(rn,lb,a,b)
 
-def pairs_seed_v1(winners:List[Tuple[str,int,str]], runners:List[Tuple[str,int,str]])->List[Tuple[str,str]]:
-    if not winners or not runners: return []
-    m=min(len(winners),len(runners))
-    winners=winners[:m]; runners=runners[:m]
-    rr=runners[1:]+runners[:1] if len(runners)>1 else runners
-    return list(zip([w for(_,_,w) in winners],[r for(_,_,r) in rr]))
+def round_labels_map(round_name:str, count:int)->List[str]:
+    # Etiquetas legibles por ronda y cantidad
+    if round_name=="FN": return ["FINAL"]
+    if round_name=="SF": return [f"SF{i+1}" for i in range(count)]
+    if round_name=="QF": return [f"QF{i+1}" for i in range(count)]
+    if round_name=="R16": return [f"R16-{i+1}" for i in range(count)]
+    if round_name=="R32": return [f"R32-{i+1}" for i in range(count)]
+    return [f"{round_name}{i+1}" for i in range(count)]
+
+def m_best_of(fmt:str)->int:
+    return 1 if fmt=="one_set" else (3 if fmt=="best_of_3" else 5)
 
 def build_initial_ko(qualified:List[Tuple[str,int,str]], best_of_fmt:str="best_of_3")->List[Dict[str,Any]]:
     N=len(qualified)
     if N==0: return []
-    winners=[q for q in qualified if q[1]==1]
-    runners=[q for q in qualified if q[1]==2]
-    slots=next_pow2(N); start_round=starting_round_name(slots)
-    def m_best_of(fmt:str)->int: return 1 if fmt=="one_set" else (3 if fmt=="best_of_3" else 5)
-    if N==slots:
-        if N==2:
-            a=qualified[0][2]; b=qualified[1][2]; lab="FINAL"
-            m={"round":"FN","label":lab,"a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0,"best_of":m_best_of(best_of_fmt)}
-            m["mid"]=_mid_for("FN",lab,a,b); return [m]
-        if N==4:
-            pairs=pairs_seed_v1(winners,runners)
-            if not pairs or len(pairs)!=2:
-                names=[q[2] for q in qualified]; pairs=[(names[0],names[3]),(names[1],names[2])]
-            out=[]
-            for i,(a,b) in enumerate(pairs):
-                lab=f"SF{i+1}"
-                m={"round":"SF","label":lab,"a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0,"best_of":m_best_of(best_of_fmt)}
-                m["mid"]=_mid_for("SF",lab,a,b); out.append(m)
-            return out
-        if N==8:
-            pairs=pairs_seed_v1(winners,runners)
-            if len(pairs)!=4:
-                names=[q[2] for q in qualified]; pairs=[(names[i],names[-(i+1)]) for i in range(4)]
-            out=[]
-            for i,(a,b) in enumerate(pairs):
-                lab=f"QF{i+1}"
-                m={"round":"QF","label":lab,"a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0,"best_of":m_best_of(best_of_fmt)}
-                m["mid"]=_mid_for("QF",lab,a,b); out.append(m)
-            return out
-    names=[q[2] for q in sorted(qualified,key=lambda x:(x[1],x[0]))]
-    byes=slots-N
-    labels_map={"FN":["FINAL"],"SF":["SF1","SF2"],"QF":["QF1","QF2","QF3","QF4"]}
-    labels=labels_map[start_round]
-    start_matches=[]; i=0; li=0
-    while i<len(names):
-        a=names[i]; b=None
-        if i+1<len(names): b=names[i+1]; i+=2
-        else: i+=1
-        lab=labels[li] if li<len(labels) else f"{start_round}{li+1}"
-        if byes>0 and b is None: b="BYE"; byes-=1
-        m={"round":start_round,"label":lab,"a":a,"b":b or "BYE","sets":[],"goldenA":0,"goldenB":0,"best_of":m_best_of(best_of_fmt)}
-        m["mid"]=_mid_for(start_round,lab,a,b or "BYE"); start_matches.append(m); li+=1
-    return start_matches
+    start_round=starting_round_name_for(N)
+    names=[q[2] for q in sorted(qualified, key=lambda x:(x[1],x[0]))]  # orden por pos y zona
+    # Si N no es potencia de 2, añadimos BYEs al final
+    target = {"FN":2,"SF":4,"QF":8,"R16":16,"R32":32}[start_round]
+    while len(names) < target:
+        names.append("BYE")
+    # Emparejar extremos: (1 vs último), (2 vs penúltimo) ...
+    pairs=[]
+    for i in range(target//2):
+        a=names[i]; b=names[-(i+1)]
+        pairs.append((a,b))
+    labels=round_labels_map(start_round, len(pairs))
+    out=[]
+    for i,(a,b) in enumerate(pairs):
+        lab=labels[i] if i < len(labels) else f"{start_round}{i+1}"
+        m={"round":start_round,"label":lab,"a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0,"best_of":m_best_of(best_of_fmt)}
+        m["mid"]=_mid_for(start_round,lab,a,b)
+        out.append(m)
+    return out
 
 def advance_pairs_from_round(matches_round:List[Dict[str,Any]])->List[str]:
     winners=[]
@@ -401,18 +344,17 @@ def advance_pairs_from_round(matches_round:List[Dict[str,Any]])->List[str]:
     return winners
 
 def make_next_round_name(current:str)->Optional[str]:
-    order=["QF","SF","FN"]
+    order=["R32","R16","QF","SF","FN"]
     if current=="FN": return None
     try: i=order.index(current)
     except ValueError: return None
     return order[i+1]
 
 def pairs_to_matches(pairs:List[Tuple[str,Optional[str]]], round_name:str, best_of_fmt:str="best_of_3")->List[Dict[str,Any]]:
-    labels={"SF":["SF1","SF2"],"FN":["FINAL"]}
-    def m_best_of(fmt:str)->int: return 1 if fmt=="one_set" else (3 if fmt=="best_of_3" else 5)
+    labels=round_labels_map(round_name, len(pairs))
     out=[]
     for i,(a,b) in enumerate(pairs, start=1):
-        lab_list=labels.get(round_name,[]); lab=lab_list[i-1] if i-1<len(lab_list) else f"{round_name}{i}"
+        lab=labels[i-1] if i-1<len(labels) else f"{round_name}{i}"
         m={"round":round_name,"label":lab,"a":a,"b":b or "BYE","sets":[],"goldenA":0,"goldenB":0,"best_of":m_best_of(best_of_fmt)}
         m["mid"]=_mid_for(round_name,lab,a,b or "BYE"); out.append(m)
     return out
@@ -499,9 +441,6 @@ def next_available_number(pairs:List[str], max_pairs:int)->Optional[int]:
 
 def format_pair_label(n:int, j1:str, j2:str)->str:
     return f"{n:02d} — {j1.strip()} / {j2.strip()}"
-
-def remove_pair_by_number(pairs:List[str], n:int)->List[str]:
-    return [p for p in pairs if parse_pair_number(p)!=n]
 
 # ====== SUPER ADMIN ======
 def super_admin_panel():
@@ -600,7 +539,7 @@ def super_admin_panel():
                     set_user(usr)
                     st.success("Cambios guardados.")
 
-    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.46")
+    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.47")
 
 # ====== ADMIN (torneos) ======
 def admin_dashboard(admin_user:Dict[str,Any]):
@@ -924,7 +863,8 @@ def tournament_manager(user:Dict[str,Any], tid:str):
     def ko_widget_key(tid_:str, mid_:str, name:str)->str:
         return f"{name}__{tid_}__{mid_}"
 
-    def save_ko_match_atomic_trans(tid_: str, mid: str, new_sets: List[Dict[str,int]], g1: int, g2: int, max_retries:int=6) -> bool:
+    def save_ko_match_atomic(tid_: str, mid: str, new_sets: List[Dict[str,int]], g1: int, g2: int, max_retries:int=6) -> bool:
+        # Lectura-modificación-escritura verificada por mid
         for attempt in range(max_retries):
             fresh = load_tournament(tid_) or {}
             ko = fresh.setdefault("ko", {}).setdefault("matches", [])
@@ -942,7 +882,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                     "sets": new_sets, "goldenA": int(g1), "goldenB": int(g2)
                 })
 
-            save_tournament_atomic(tid_, fresh, make_snapshot=True)
+            save_tournament(tid_, fresh, make_snapshot=True)
 
             verify = load_tournament(tid_) or {}
             vko = verify.get("ko", {}).get("matches", [])
@@ -975,7 +915,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
             mid=match["mid"]
 
         fmt_local=tourn_state["config"].get("format","best_of_3")
-        best_of=match.get("best_of", 3 if fmt_local=="best_of_3" else (1 if fmt_local=="one_set" else 5))
+        best_of=match.get("best_of", m_best_of(fmt_local))
         n_min=best_of//2 + 1 if best_of>1 else 1
         n_max=best_of
 
@@ -1050,7 +990,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
 
                 st.session_state[saving_key] = True
                 with st.spinner("Guardando partido KO de manera segura…"):
-                    ok = save_ko_match_atomic_trans(tid_, mid, new_sets, g1, g2, max_retries=6)
+                    ok = save_ko_match_atomic(tid_, mid, new_sets, g1, g2, max_retries=6)
                 st.session_state[saving_key] = False
 
                 if not ok:
@@ -1077,6 +1017,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
             if not all_complete:
                 st.info("⏳ A definir — Completa la fase de grupos para habilitar los playoffs.")
             else:
+                # Calcular clasificados
                 zone_tables=[]
                 for zi,group in enumerate(state["groups"], start=1):
                     zone_name=f"Z{zi}"
@@ -1090,46 +1031,70 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                         state["ko"]["matches"]=build_initial_ko(qualified, best_of_fmt=state["config"].get("format","best_of_3"))
                         ensure_match_ids(state["ko"]["matches"]); save_tournament(tid,state)
                         st.session_state.last_hash=compute_state_hash(state); st.session_state.autosave_last_ts=time.time()
-                        st.success("Playoffs regenerados.")
+                        st.success("Playoffs regenerados."); st.rerun()
                 with c2:
                     st.caption("Usa esto si cambiaste resultados de zonas y querés rehacer la llave.")
 
-                if not state["ko"]["matches"]:
-                    state["ko"]["matches"]=build_initial_ko(qualified, best_of_fmt=state["config"].get("format","best_of_3"))
-                    ensure_match_ids(state["ko"]["matches"]); save_tournament(tid,state)
+                # Crear ronda inicial si no existe
+                rounds_present = {m.get("round") for m in state["ko"]["matches"]}
+                if not rounds_present:
+                    init = build_initial_ko(qualified, best_of_fmt=state["config"].get("format","best_of_3"))
+                    ensure_match_ids(init)
+                    state["ko"]["matches"] = init
+                    save_tournament(tid,state)
                     st.session_state.last_hash=compute_state_hash(state); st.session_state.autosave_last_ts=time.time()
+                    st.info("Ronda inicial de KO creada."); st.rerun()
 
                 ensure_match_ids(state["ko"]["matches"])
-                round_order=["QF","SF","FN"]
+
+                # Mostrar rondas en orden
+                round_order=["R32","R16","QF","SF","FN"]
                 for rname in round_order:
                     ms=[m for m in state["ko"]["matches"] if m.get("round")==rname]
                     if not ms: continue
                     st.markdown(f"### {rname}")
                     render_playoff_round(tid, rname, ms, state)
 
-                progressed=False
-                for rname in ["QF","SF"]:
-                    ms=[m for m in state["ko"]["matches"] if m.get("round")==rname]
-                    if not ms: continue
-                    all_done=True; adv=[]
-                    for m in ms:
-                        sets=m.get("sets",[])
-                        if not sets or not match_has_winner(sets):
-                            all_done=False; break
-                        statsF=compute_sets_stats(sets)
-                        adv.append(m['a'] if statsF["sets1"]>statsF["sets2"] else m['b'])
-                    if all_done:
-                        next_rname=make_next_round_name(rname)
-                        if next_rname:
-                            pairs=next_round(adv)
-                            state["ko"]["matches"]=[mm for mm in state["ko"]["matches"] if mm.get("round") not in (next_rname,)]
-                            new_ms=pairs_to_matches(pairs,next_rname,best_of_fmt=state["config"].get("format","best_of_3"))
-                            ensure_match_ids(new_ms); state["ko"]["matches"].extend(new_ms); progressed=True
-                if progressed:
-                    save_tournament(tid,state)
-                    st.session_state.last_hash=compute_state_hash(state); st.session_state.autosave_last_ts=time.time()
-                    st.info("Ronda siguiente preparada.")
+                # ---- Progresión SIN sobrescribir la ronda siguiente si ya existe ----
+                progressed = False
+                for rname in ["R32","R16","QF","SF"]:
+                    ms = [m for m in state["ko"]["matches"] if m.get("round") == rname]
+                    if not ms:
+                        continue
 
+                    next_rname = make_next_round_name(rname)
+                    if not next_rname:
+                        continue
+
+                    existing_next = [m for m in state["ko"]["matches"] if m.get("round") == next_rname]
+                    if existing_next:
+                        continue  # ya existe la siguiente ronda; no tocar
+
+                    # Solo crear si TODOS los partidos de la ronda actual están completos
+                    all_done, adv = True, []
+                    for m in ms:
+                        sets = m.get("sets", [])
+                        if not sets or not match_has_winner(sets):
+                            all_done = False
+                            break
+                        statsF = compute_sets_stats(sets)
+                        adv.append(m['a'] if statsF["sets1"] > statsF["sets2"] else m['b'])
+
+                    if all_done and adv:
+                        pairs = next_round(adv)
+                        new_ms = pairs_to_matches(pairs, next_rname, best_of_fmt=state["config"].get("format", "best_of_3"))
+                        ensure_match_ids(new_ms)
+                        state["ko"]["matches"].extend(new_ms)
+                        progressed = True
+
+                if progressed:
+                    save_tournament(tid, state)
+                    st.session_state.last_hash = compute_state_hash(state)
+                    st.session_state.autosave_last_ts = time.time()
+                    st.info("Ronda siguiente preparada.")
+                    st.rerun()
+
+                # Campeón
                 finals=[m for m in state["ko"]["matches"] if m.get("round")=="FN"]
                 for fm in finals:
                     sets=fm.get("sets",[])
@@ -1142,6 +1107,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                         )
                         st.balloons()
                         break
+
             st.markdown("</div>", unsafe_allow_html=True)
 
     # ======= AUTOSAVE (conservador) =======
@@ -1231,20 +1197,20 @@ def main():
             elif sha(pin)!=user["pin_hash"]: st.error("PIN incorrecto.")
             else:
                 st.session_state.auth_user=user; st.success(f"Bienvenido {user['username']} ({user['role']})"); st.rerun()
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.46"); return
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.47"); return
 
     user=st.session_state["auth_user"]
     if user["role"]=="SUPER_ADMIN":
         if mode=="public" and _tid: viewer_tournament(_tid, public=True)
         else: super_admin_panel()
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.46"); return
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.47"); return
     if user["role"]=="TOURNAMENT_ADMIN":
-        admin_dashboard(user); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.46"); return
+        admin_dashboard(user); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.47"); return
     if user["role"]=="VIEWER":
         if mode=="public" and _tid: viewer_tournament(_tid, public=True)
         else: viewer_dashboard(user)
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.46"); return
-    st.error("Rol desconocido."); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.46")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.47"); return
+    st.error("Rol desconocido."); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.47")
 
 if __name__=="__main__":
     main()
