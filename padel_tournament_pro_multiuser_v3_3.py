@@ -1,13 +1,14 @@
-# padel_tournament_pro_multiuser_v3_3.py — v3.3.44
-# Cambios claves vs 3.3.43:
-# - Guardado KO transaccional + verificado, con I/O atómico y lock por torneo.
-# - Spinner y bloqueo anti doble-submit durante el guardado KO.
-# - Mantiene UI y resto de lógica intactas.
-# - Link público editable (no disabled) para copiar manualmente.
+# padel_tournament_pro_multiuser_v3_3.py — v3.3.45
+# Cambios vs 3.3.44:
+# - Descargas JSON con st.download_button (sin /media efímero).
+# - Restauración desde JSON directa (sin guardar ids).
+# - KO: guardado transaccional + lock + replace atómico + verificación.
+# - Logo por URL RAW con fallback SVG.
+# - Sin cambios de UI más allá de lo necesario.
 
 import streamlit as st
 import pandas as pd
-import random, hashlib, json, base64, time, uuid, requests, os, tempfile
+import random, hashlib, json, base64, time, uuid, requests, os, tempfile, io
 from typing import Dict, Any, List, Optional, Tuple
 from itertools import combinations
 from pathlib import Path
@@ -599,7 +600,7 @@ def super_admin_panel():
                     set_user(usr)
                     st.success("Cambios guardados.")
 
-    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.44")
+    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.45")
 
 # ====== ADMIN (torneos) ======
 def admin_dashboard(admin_user:Dict[str,Any]):
@@ -638,7 +639,7 @@ def admin_dashboard(admin_user:Dict[str,Any]):
             st.rerun()
     with c3:
         tid=sel["tournament_id"]
-        st.caption("Link público (solo lectura) — copiar manualmente:")
+        st.caption("Link público (solo lectura) — copia manual:")
         public_url=f"{app_cfg.get('app_base_url', DEFAULT_APP_CONFIG['app_base_url'])}/?mode=public&tid={tid}"
         st.text_input("URL pública", value=public_url, disabled=False, label_visibility="collapsed", key=f"pub_{tid}")
 
@@ -730,10 +731,11 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                     st.success("Zonas + fixture generados.")
 
         st.divider()
-        # Persistencia (migrada aquí)
+        # ---- Persistencia segura (descarga/subida) ----
         st.subheader("💾 Persistencia")
         def sanitize_filename(s:str)->str:
             return "".join(ch if ch.isalnum() or ch in ("-","_") else "_" for ch in s).strip("_")
+
         c1p,c2p,c3p,c4p=st.columns(4)
         with c1p:
             st.session_state.autosave=st.checkbox("Autosave", value=st.session_state.autosave)
@@ -743,10 +745,11 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                 st.session_state.last_hash=compute_state_hash(state); st.session_state.autosave_last_ts=time.time()
                 st.success("Guardado")
         with c3p:
+            # Generar bytes en este render y ofrecer download_button
             meta=state.get("meta",{}); ts=datetime.now().strftime("%Y%m%d_%H%M%S")
             fname=f"{meta.get('tournament_id','')}_{sanitize_filename(meta.get('t_name',''))}_{meta.get('date','')}_{ts}.json"
             payload=json.dumps(state,ensure_ascii=False,indent=2).encode("utf-8")
-            st.download_button("⬇️ Descargar estado (JSON)", data=payload, file_name=fname, mime="application/json", key=f"dl_state_json_{tid}")
+            st.download_button("⬇️ Descargar estado (JSON)", data=payload, file_name=fname, mime="application/json", key=f"dl_state_json_{tid}_{ts}")
         with c4p:
             up=st.file_uploader("⬆️ Cargar estado", type=["json"], key=f"up_{tid}")
             if up is not None:
@@ -922,7 +925,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
     def ko_widget_key(tid_:str, mid_:str, name:str)->str:
         return f"{name}__{tid_}__{mid_}"
 
-    def save_ko_match_atomic(tid_: str, mid: str, new_sets: List[Dict[str,int]], g1: int, g2: int, max_retries:int=6) -> bool:
+    def save_ko_match_atomic_trans(tid_: str, mid: str, new_sets: List[Dict[str,int]], g1: int, g2: int, max_retries:int=6) -> bool:
         """
         Guardado transaccional y verificado:
           1) Carga fresca desde disco
@@ -1058,7 +1061,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
 
                 st.session_state[saving_key] = True
                 with st.spinner("Guardando partido KO de manera segura…"):
-                    ok = save_ko_match_atomic(tid_, mid, new_sets, g1, g2, max_retries=6)
+                    ok = save_ko_match_atomic_trans(tid_, mid, new_sets, g1, g2, max_retries=6)
                 st.session_state[saving_key] = False
 
                 if not ok:
@@ -1239,20 +1242,20 @@ def main():
             elif sha(pin)!=user["pin_hash"]: st.error("PIN incorrecto.")
             else:
                 st.session_state.auth_user=user; st.success(f"Bienvenido {user['username']} ({user['role']})"); st.rerun()
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.44"); return
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.45"); return
 
     user=st.session_state["auth_user"]
     if user["role"]=="SUPER_ADMIN":
         if mode=="public" and _tid: viewer_tournament(_tid, public=True)
         else: super_admin_panel()
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.44"); return
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.45"); return
     if user["role"]=="TOURNAMENT_ADMIN":
-        admin_dashboard(user); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.44"); return
+        admin_dashboard(user); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.45"); return
     if user["role"]=="VIEWER":
         if mode=="public" and _tid: viewer_tournament(_tid, public=True)
         else: viewer_dashboard(user)
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.44"); return
-    st.error("Rol desconocido."); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.44")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.45"); return
+    st.error("Rol desconocido."); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.45")
 
 if __name__=="__main__":
     main()
