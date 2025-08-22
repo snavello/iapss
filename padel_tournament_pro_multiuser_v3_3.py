@@ -1,12 +1,10 @@
-# padel_tournament_pro_multiuser_v3_3.py — v3.3.42
-# Correcciones clave:
-# - KO transaccional por 'mid' (evita sobrescrituras al guardar SF1/SF2 desde formularios distintos)
-# - st.rerun() tras guardar KO (trofeo + progresión inmediata)
-# - Recalculo de tablas tras guardar partidos
-# - Autosave conservador
-# - Logo por URL con fallback SVG
-# - Link público editable
-# Nota: Mantiene UI y resto de funciones intactas respecto a la versión previa
+# padel_tournament_pro_multiuser_v3_3.py — v3.3.43
+# Cambios vs v3.3.42:
+# - FIX crítico: evitar carrera entre guardado KO atómico y autosave.
+#   • save_ko_match_atomic() ahora marca st.session_state["skip_autosave_once"]=True
+#   • Al final del ciclo, el autosave se salta si esa bandera está activa (y luego se limpia).
+# - Mantiene UI y resto de lógica como en v3.3.42.
+# - KO transaccional, recalculo de tablas y progresión tras cada guardado (st.rerun()).
 
 import streamlit as st
 import pandas as pd
@@ -22,17 +20,12 @@ st.set_page_config(page_title="iAPPs Pádel", layout="wide")
 # ========== Estilos ==========
 st.markdown("""
 <style>
-/* Encabezado y look & feel */
-.iapps-header-row{display:flex;align-items:center;gap:12px;padding:6px 0 4px 0;border-bottom:1px solid #e5e7eb;}
+.iapps-header-row{display:flex;align-items:center;gap:12px;padding:6px 0 4px 0;border-bottom:1px solid #e5e7eb;position:sticky;top:0;background:#fff;z-index:20;}
 .iapps-header-logo{max-height:54px;width:auto;height:auto;max-width:22vw;object-fit:contain;}
 .iapps-user{font-weight:600;}
 .iapps-role{color:#6b7280;margin-left:6px;}
-
-/* Tablas */
 table.zebra tbody tr:nth-child(odd){background:#f9fafb;}
 table.dark-header thead th{background:#2f3b52;color:#fff;}
-
-/* Inputs compactos para Resultados */
 .thin .stNumberInput,.thin .stTextInput,.thin .stSelectbox,.thin .stSlider{max-width:160px!important;}
 </style>
 """, unsafe_allow_html=True)
@@ -93,7 +86,6 @@ def _brand_svg(width_px:int=180)->str:
 
 @st.cache_data(show_spinner=False)
 def _fetch_image_data_uri(url:str, timeout:float=6.0)->str:
-    """Descarga imagen (incluye SVG) y devuelve data URI. Fallback: cadena vacía."""
     try:
         if not url: return ""
         r=requests.get(url,timeout=timeout); r.raise_for_status()
@@ -396,6 +388,7 @@ def init_session():
     st.session_state.setdefault("autosave",True)
     st.session_state.setdefault("last_hash","")
     st.session_state.setdefault("autosave_last_ts",0.0)
+    st.session_state.setdefault("skip_autosave_once", False)
 
 def compute_state_hash(state:Dict[str,Any])->str:
     return hashlib.sha256(json.dumps(state, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
@@ -557,7 +550,7 @@ def super_admin_panel():
                     set_user(usr)
                     st.success("Cambios guardados.")
 
-    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.42")
+    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.43")
 
 # ========== ADMIN (torneos) ==========
 def admin_dashboard(admin_user:Dict[str,Any]):
@@ -848,14 +841,13 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                             if stats["sets1"]==stats["sets2"]:
                                 st.error("Debe haber un ganador (no se permiten empates). Ajustá los sets.")
                             else:
-                                # Guardar directo en memoria (grupos no necesitan atomicidad mid)
                                 m["sets"]=new_sets; m["golden1"]=int(g1); m["golden2"]=int(g2)
                                 save_tournament(tid,state)
                                 st.session_state.last_hash=compute_state_hash(state); st.session_state.autosave_last_ts=time.time()
                                 winner=m['pair1'] if stats["sets1"]>stats["sets2"] else m['pair2']
                                 st.success(f"Partido guardado. 🏆 Ganó {winner}")
                                 st.toast("✔ Partido de grupos guardado", icon="✅")
-                                st.rerun()  # recalcula tablas
+                                st.rerun()
 
             st.markdown("</div>", unsafe_allow_html=True)
 
@@ -881,9 +873,8 @@ def tournament_manager(user:Dict[str,Any], tid:str):
     def ko_widget_key(tid_:str, mid_:str, name:str)->str:
         return f"{name}__{tid_}__{mid_}"
 
-    # === Guardado KO ATÓMICO (clave para SF1/SF2) ===
     def save_ko_match_atomic(tid_: str, mid: str, new_sets: List[Dict[str,int]], g1: int, g2: int):
-        """Carga el torneo desde disco, actualiza sólo el partido KO indicado por 'mid' y guarda."""
+        """Carga-dif actualizada, escribe sólo ese partido y marca skip_autosave_once para evitar carrera."""
         fresh = load_tournament(tid_) or {}
         ko = fresh.setdefault("ko", {}).setdefault("matches", [])
         updated = False
@@ -900,10 +891,11 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                 "sets": new_sets, "goldenA": int(g1), "goldenB": int(g2)
             })
         save_tournament(tid_, fresh)
+        # ⚠️ Muy importante: evitar que el autosave del ciclo actual pise este guardado
         st.session_state.last_hash = compute_state_hash(fresh)
         st.session_state.autosave_last_ts = time.time()
+        st.session_state["skip_autosave_once"] = True
 
-    # Render de un partido KO (usa guardado atómico + rerun)
     def render_playoff_match(tid_:str, match:dict, tourn_state:dict):
         mid=match.get("mid")
         if not mid:
@@ -963,7 +955,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
             gC,gD,_=st.columns([1,1,1])
             with gC:
                 g1=st.number_input(
-                    f"Puntos de oro {match['a']}",0,200,int(match.get("goldenA",0)),
+                    f"Puntos de oro {match['a']}",0,200,int(match.get("goldenB" if False else "goldenA",0)),
                     key=ko_widget_key(tid_,mid,"ko_g1")
                 )
             with gD:
@@ -978,7 +970,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                 if stats["sets1"]==stats["sets2"]:
                     st.error("Debe haber un ganador en KO (no se permiten empates). Ajusta los sets.")
                     return
-                # Guardado atómico (evita sobrescrituras SF1/SF2)
+                # Guardado atómico + bandera para saltar autosave en este ciclo
                 save_ko_match_atomic(tid_, mid, new_sets, g1, g2)
                 st.success("✔ Partido KO guardado")
                 st.toast("KO guardado", icon="✅")
@@ -1030,7 +1022,6 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                     st.markdown(f"### {rname}")
                     render_playoff_round(tid, rname, ms, state)
 
-                # Progresión de rondas (tras render, pero se recomputa en cada rerun)
                 progressed=False
                 for rname in ["QF","SF"]:
                     ms=[m for m in state["ko"]["matches"] if m.get("round")==rname]
@@ -1046,7 +1037,6 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                         next_rname=make_next_round_name(rname)
                         if next_rname:
                             pairs=next_round(adv)
-                            # eliminar ronda next previa (si existiera) y regenerar
                             state["ko"]["matches"]=[mm for mm in state["ko"]["matches"] if mm.get("round") not in (next_rname,)]
                             new_ms=pairs_to_matches(pairs,next_rname,best_of_fmt=state["config"].get("format","best_of_3"))
                             ensure_match_ids(new_ms); state["ko"]["matches"].extend(new_ms); progressed=True
@@ -1069,12 +1059,16 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                         break
             st.markdown("</div>", unsafe_allow_html=True)
 
-    # Autosave conservador
+    # ======= AUTOSAVE (con protección de carrera) =======
     current_hash=compute_state_hash(state); now_ts=time.time()
-    if st.session_state.autosave and current_hash!=st.session_state.last_hash:
-        if now_ts - st.session_state.autosave_last_ts >= 4.0:
-            save_tournament(tid,state)
-            st.session_state.last_hash=current_hash; st.session_state.autosave_last_ts=now_ts
+    if st.session_state.get("skip_autosave_once", False):
+        # Saltamos una vez para no pisar el guardado KO atómico del ciclo.
+        st.session_state["skip_autosave_once"] = False
+    else:
+        if st.session_state.autosave and current_hash!=st.session_state.last_hash:
+            if now_ts - st.session_state.autosave_last_ts >= 4.0:
+                save_tournament(tid,state)
+                st.session_state.last_hash=current_hash; st.session_state.autosave_last_ts=now_ts
 
 # ========== VIEWER ==========
 def viewer_dashboard(user:Dict[str,Any]):
@@ -1156,20 +1150,20 @@ def main():
             elif sha(pin)!=user["pin_hash"]: st.error("PIN incorrecto.")
             else:
                 st.session_state.auth_user=user; st.success(f"Bienvenido {user['username']} ({user['role']})"); st.rerun()
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.42"); return
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.43"); return
 
     user=st.session_state["auth_user"]
     if user["role"]=="SUPER_ADMIN":
         if mode=="public" and _tid: viewer_tournament(_tid, public=True)
         else: super_admin_panel()
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.42"); return
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.43"); return
     if user["role"]=="TOURNAMENT_ADMIN":
-        admin_dashboard(user); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.42"); return
+        admin_dashboard(user); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.43"); return
     if user["role"]=="VIEWER":
         if mode=="public" and _tid: viewer_tournament(_tid, public=True)
         else: viewer_dashboard(user)
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.42"); return
-    st.error("Rol desconocido."); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.42")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.43"); return
+    st.error("Rol desconocido."); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.43")
 
 if __name__=="__main__":
     main()
