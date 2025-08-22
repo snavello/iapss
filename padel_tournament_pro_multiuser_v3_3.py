@@ -753,7 +753,7 @@ def admin_dashboard(admin_user: Dict[str, Any]):
         tid = sel["tournament_id"]
         st.caption("Link público (solo lectura) — copiar manualmente:")
         public_url = f"{app_cfg.get('app_base_url', DEFAULT_APP_CONFIG['app_base_url'])}/?mode=public&tid={tid}"
-        st.text_input("URL pública", value=public_url, disabled=True, label_visibility="collapsed", key=f"pub_{tid}")
+        st.text_input("URL pública", value=public_url, disabled=False, label_visibility="collapsed", key=f"pub_{tid}")
 
     if st.session_state.get("current_tid"):
         tournament_manager(admin_user, st.session_state["current_tid"])
