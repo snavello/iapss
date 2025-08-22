@@ -1,9 +1,9 @@
-# padel_tournament_pro_multiuser_v3_3.py — v3.3.39
-# Cambios mínimos vs v3.3.38:
-# - Playoffs: claves de widgets estables por partido (mid) -> se evita el bucle/“parpadeo” al guardar QF3/QF4.
-# - Playoffs: sin st.rerun() tras guardar; rely en el rerun natural del botón.
-# - KO: generación de 'mid' determinista y normalización para partidos existentes.
-# - Mantiene UI y reglas deportivas sin cambios.
+# padel_tournament_pro_multiuser_v3_3.py — v3.3.40
+# Cambios mínimos vs v3.3.39:
+# - Admin: se implementa la pestaña "📊 Tablas" (cálculo de posiciones por zona, aun si la zona no está completa).
+# - En "Torneos" (panel Admin): el campo del link público ahora NO está deshabilitado (se puede seleccionar/copiar).
+# - Resultados (grupos): mantiene insignia de ganador al guardar para una rápida identificación.
+# - No se tocan otras funcionalidades ni la apariencia general.
 
 import streamlit as st
 import pandas as pd
@@ -28,7 +28,7 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-st.set_page_config(page_title="iAPPs Pádel — v3.3.39", layout="wide")
+st.set_page_config(page_title="iAPPs Pádel — v3.3.40", layout="wide")
 
 # ====== CSS ======
 st.markdown("""
@@ -631,7 +631,7 @@ def super_admin_panel():
                     set_user(usr)
                     st.success("Cambios guardados.")
 
-    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.39")
+    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.40")
 
 # ====== ADMIN (torneos) ======
 def load_index_for_admin(admin_username: str) -> List[Dict[str, Any]]:
@@ -753,6 +753,7 @@ def admin_dashboard(admin_user: Dict[str, Any]):
         tid = sel["tournament_id"]
         st.caption("Link público (solo lectura) — copiar manualmente:")
         public_url = f"{app_cfg.get('app_base_url', DEFAULT_APP_CONFIG['app_base_url'])}/?mode=public&tid={tid}"
+        # AHORA editable (disabled=False) para permitir seleccionar y copiar
         st.text_input("URL pública", value=public_url, disabled=False, label_visibility="collapsed", key=f"pub_{tid}")
 
     if st.session_state.get("current_tid"):
@@ -1063,7 +1064,27 @@ def tournament_manager(user: Dict[str, Any], tid: str):
 
             st.markdown("</div>", unsafe_allow_html=True)  # fin .thin
 
-    # ========= PLAYOFFS (con keys estables) =========
+    # --- TABLAS (ADMIN) ---
+    with tab_tables:
+        st.subheader("Tablas de posiciones por zona")
+        if not state.get("groups") or not state.get("results"):
+            st.info("Generá primero las zonas y el fixture (Configuración o Parejas).")
+        else:
+            cfg_here = state["config"]
+            fmt_here = cfg_here.get("format","best_of_3")
+            seeded_set = set(state.get("seeded_pairs", [])) if cfg_here.get("use_seeds", False) else set()
+            for zi, group in enumerate(state["groups"], start=1):
+                zone_name = f"Z{zi}"
+                status = "✅ Completa" if zone_complete(zone_name, state["results"], fmt_here) else "⏳ A definir"
+                st.markdown(f"#### Tabla {zone_name} — {status}")
+                table = standings_from_results(zone_name, group, state["results"], cfg_here, seeded_set=seeded_set)
+                if table.empty:
+                    st.info("Sin datos para mostrar todavía.")
+                else:
+                    show = table[["Zona","Pos","Pareja","PJ","PG","PP","GF","GC","DG","GP","PTS"]]
+                    st.markdown(show.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
+
+    # ========= PLAYOFFS (con keys estables; sin rerun forzado) =========
 
     def widget_key(tid_: str, mid_: str, name: str) -> str:
         return f"{name}__{tid_}__{mid_}"
@@ -1130,7 +1151,7 @@ def tournament_manager(user: Dict[str, Any], tid: str):
         save_key = widget_key(tid_, mid, "ko_save_btn")
         if st.button("Guardar partido KO", key=save_key):
             stats = compute_sets_stats(new_sets)
-            # En KO, si hay empate de sets, se sortea (comportamiento previo)
+            # En KO, si hay empate de sets, se sortea (comportamiento vigente)
             if stats["sets1"] == stats["sets2"]:
                 rr = random.Random(int(tourn_state["config"].get("seed",42)) + int(hashlib.md5(mid.encode()).hexdigest(),16)%1000)
                 winner_rand = rr.choice([match['a'], match['b']])
@@ -1169,6 +1190,7 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                     zone_name = f"Z{zi}"
                     table = standings_from_results(zone_name, group, state["results"], state["config"])
                     zone_tables.append(table)
+
                 qualified = qualified_from_tables(zone_tables, state["config"]["top_per_zone"])
 
                 c1,c2 = st.columns(2)
@@ -1180,7 +1202,6 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                         st.session_state.last_hash = compute_state_hash(state)
                         st.session_state.autosave_last_ts = time.time()
                         st.success("Playoffs regenerados.")
-                        # sin st.rerun()
 
                 with c2:
                     st.caption("Usa esto si cambiaste resultados de zonas y querés rehacer la llave.")
@@ -1203,13 +1224,11 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                     st.markdown(f"### {rname}")
                     render_playoff_round(tid, rname, ms, state)
 
-                # Avance automático de ronda si todos los partidos de una ronda están completos
-                # (mantener conducta, pero sin st.rerun(); aparecerá al siguiente render)
+                # Avance automático de ronda si todos completos
                 for rname in ["QF","SF"]:
                     ms = [m for m in state["ko"]["matches"] if m.get("round")==rname]
                     if not ms:
                         continue
-                    # ¿Todos completos?
                     all_done = True
                     adv = []
                     for m in ms:
@@ -1245,7 +1264,6 @@ def tournament_manager(user: Dict[str, Any], tid: str):
                             f"<div style='padding:14px 18px;border-radius:10px;background:#fff9c4;border:1px solid #ffeb3b;font-size:1.1rem;font-weight:700;color:#795548;margin:8px 0;'>🏆 CAMPEÓN: {champion}</div>",
                             unsafe_allow_html=True
                         )
-                        # balloons sólo 1 vez por render
                         st.balloons()
                         break
 
@@ -1371,7 +1389,7 @@ def main():
                 st.session_state.auth_user = user
                 st.success(f"Bienvenido {user['username']} ({user['role']})")
                 st.rerun()
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.39")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.40")
         return
 
     user = st.session_state["auth_user"]
@@ -1381,12 +1399,12 @@ def main():
             viewer_tournament(_tid, public=True)
         else:
             super_admin_panel()
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.39")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.40")
         return
 
     if user["role"] == "TOURNAMENT_ADMIN":
         admin_dashboard(user)
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.39")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.40")
         return
 
     if user["role"] == "VIEWER":
@@ -1394,11 +1412,11 @@ def main():
             viewer_tournament(_tid, public=True)
         else:
             viewer_dashboard(user)
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.39")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.40")
         return
 
     st.error("Rol desconocido.")
-    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.39")
+    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.40")
 
 if __name__ == "__main__":
     main()
