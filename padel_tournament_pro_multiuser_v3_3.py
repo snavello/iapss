@@ -1,10 +1,11 @@
-# padel_tournament_pro_multiuser_v3_3.py — v3.3.45
-# Cambios vs 3.3.44:
-# - Descargas JSON con st.download_button (sin /media efímero).
-# - Restauración desde JSON directa (sin guardar ids).
-# - KO: guardado transaccional + lock + replace atómico + verificación.
-# - Logo por URL RAW con fallback SVG.
-# - Sin cambios de UI más allá de lo necesario.
+# padel_tournament_pro_multiuser_v3_3.py — v3.3.46
+# Correcciones:
+# - Descargas JSON via st.download_button (sin /media).
+# - Restaurar JSON directa (sin objetos efímeros).
+# - KO: guardado atómico + verificación; sin pisar otros partidos.
+# - Tablas se actualizan tras guardar partidos (st.rerun()).
+# - Logo por URL RAW con fallback SVG; barra superior sticky.
+# - Link público visible en text_input (enabled).
 
 import streamlit as st
 import pandas as pd
@@ -284,16 +285,15 @@ def standings_from_results(zone_name, group_pairs, results_list, cfg, seeded_set
         p1,p2=m["pair1"],m["pair2"]
         g1,g2=stats["games1"],stats["games2"]
         s1,s2=stats["sets1"],stats["sets2"]
-        for p,gf,gc in [(p1,g1),(p2,g2)]:
-            if p==p1:
-                table.at[p,"PJ"]+=1; table.at[p,"GF"]+=g1; table.at[p,"GC"]+=g2
-            else:
-                table.at[p,"PJ"]+=1; table.at[p,"GF"]+=g2; table.at[p,"GC"]+=g1
+        for p in (p1,p2):
+            table.at[p,"PJ"]+=1
+        table.at[p1,"GF"]+=g1; table.at[p1,"GC"]+=g2
+        table.at[p2,"GF"]+=g2; table.at[p2,"GC"]+=g1
         table.at[p1,"GP"]+=int(m.get("golden1",0))
         table.at[p2,"GP"]+=int(m.get("golden2",0))
         if s1>s2:
             table.at[p1,"PG"]+=1; table.at[p2,"PP"]+=1; table.at[p1,"PTS"]+=cfg["points_win"]; table.at[p2,"PTS"]+=cfg["points_loss"]
-        elif s2>s1:
+        else:
             table.at[p2,"PG"]+=1; table.at[p1,"PP"]+=1; table.at[p2,"PTS"]+=cfg["points_win"]; table.at[p1,"PTS"]+=cfg["points_loss"]
     table["DG"]=table["GF"]-table["GC"]
     r=rng(0,cfg["seed"]); randmap={p:r.random() for p in table.index}
@@ -600,7 +600,7 @@ def super_admin_panel():
                     set_user(usr)
                     st.success("Cambios guardados.")
 
-    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.45")
+    st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.46")
 
 # ====== ADMIN (torneos) ======
 def admin_dashboard(admin_user:Dict[str,Any]):
@@ -745,7 +745,6 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                 st.session_state.last_hash=compute_state_hash(state); st.session_state.autosave_last_ts=time.time()
                 st.success("Guardado")
         with c3p:
-            # Generar bytes en este render y ofrecer download_button
             meta=state.get("meta",{}); ts=datetime.now().strftime("%Y%m%d_%H%M%S")
             fname=f"{meta.get('tournament_id','')}_{sanitize_filename(meta.get('t_name',''))}_{meta.get('date','')}_{ts}.json"
             payload=json.dumps(state,ensure_ascii=False,indent=2).encode("utf-8")
@@ -926,14 +925,6 @@ def tournament_manager(user:Dict[str,Any], tid:str):
         return f"{name}__{tid_}__{mid_}"
 
     def save_ko_match_atomic_trans(tid_: str, mid: str, new_sets: List[Dict[str,int]], g1: int, g2: int, max_retries:int=6) -> bool:
-        """
-        Guardado transaccional y verificado:
-          1) Carga fresca desde disco
-          2) Modifica SOLO el partido con ese mid
-          3) Guarda con lock + escritura atómica
-          4) Recarga y verifica que persistió
-        Reintenta hasta max_retries si algo pisa el cambio.
-        """
         for attempt in range(max_retries):
             fresh = load_tournament(tid_) or {}
             ko = fresh.setdefault("ko", {}).setdefault("matches", [])
@@ -951,10 +942,8 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                     "sets": new_sets, "goldenA": int(g1), "goldenB": int(g2)
                 })
 
-            # Guardar con I/O atómico y lock
             save_tournament_atomic(tid_, fresh, make_snapshot=True)
 
-            # Verificar
             verify = load_tournament(tid_) or {}
             vko = verify.get("ko", {}).get("matches", [])
             persisted = False
@@ -1242,20 +1231,20 @@ def main():
             elif sha(pin)!=user["pin_hash"]: st.error("PIN incorrecto.")
             else:
                 st.session_state.auth_user=user; st.success(f"Bienvenido {user['username']} ({user['role']})"); st.rerun()
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.45"); return
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.46"); return
 
     user=st.session_state["auth_user"]
     if user["role"]=="SUPER_ADMIN":
         if mode=="public" and _tid: viewer_tournament(_tid, public=True)
         else: super_admin_panel()
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.45"); return
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.46"); return
     if user["role"]=="TOURNAMENT_ADMIN":
-        admin_dashboard(user); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.45"); return
+        admin_dashboard(user); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.46"); return
     if user["role"]=="VIEWER":
         if mode=="public" and _tid: viewer_tournament(_tid, public=True)
         else: viewer_dashboard(user)
-        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.45"); return
-    st.error("Rol desconocido."); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.45")
+        st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.46"); return
+    st.error("Rol desconocido."); st.caption("Iapps Padel Tournament · iAPPs Pádel — v3.3.46")
 
 if __name__=="__main__":
     main()
