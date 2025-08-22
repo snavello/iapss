@@ -849,7 +849,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                     st.markdown(show.to_html(index=False, classes=["zebra","dark-header"]), unsafe_allow_html=True)
                     # --- PLAYOFFS ---
                     def ko_widget_key(tid_:str, mid_:str, name:str)->str:
-        return f"{name}__{tid_}__{mid_}"
+                        return f"{name}__{tid_}__{mid_}"
 
     def render_playoff_match(tid_:str, match:dict, tourn_state:dict):
         mid=match.get("mid")
