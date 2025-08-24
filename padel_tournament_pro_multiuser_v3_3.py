@@ -1,12 +1,12 @@
-# padel_tournament_pro_v1_1_1.py
-# Iapps Pádel Tournament — Persistencia en GitHub
-# Requisitos: streamlit, requests, pandas
-# Secrets necesarios en Streamlit:
-# [github]
-# token  = "ghp_xxx..."
-# owner  = "TU_USUARIO_O_ORG"
-# repo   = "iapps-data"
-# branch = "main"
+# padel_tournament_pro_v1_1_2.py
+# Iapps Pádel Tournament — Persistencia en GitHub (users / app_config / torneos / snapshots)
+# Cambios clave:
+# - No se usa key= en st.form_submit_button (evita TypeError + Missing Submit Button).
+# - Dashboard y Manager no se renderizan a la vez (evita DuplicateElementId).
+# - Botón "⬅ Volver" limpia current_tid.
+# - KO con progresión automática y guardado atómico.
+# - Link público de solo lectura (copia manual).
+# - Tablas se actualizan tras cada guardado.
 
 import os, json, time, random, uuid, base64
 from datetime import datetime, date
@@ -16,7 +16,7 @@ import requests
 import pandas as pd
 import streamlit as st
 
-APP_VERSION = "v1.1.1"
+APP_VERSION = "v1.1.2"
 
 # ============================
 # ====== CSS / ESTILOS  ======
@@ -31,8 +31,9 @@ BASE_CSS = """
 .zebra tr:nth-child(odd){ background:var(--zebra1)!important; }
 .dark-header thead tr th{ background:#424242!important; color:white!important; padding:8px!important; }
 .copyable{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
-.header-wrap{ display:flex; align-items:center; gap:16px; border-bottom:1px solid var(--border); padding:8px 0 6px 0; margin-bottom:6px; position:sticky; top:0; background:white; z-index:100; }
-.header-wrap img{ max-height:48px; width:auto; }
+.header-wrap{ position:sticky; top:0; background:white; z-index:100; border-bottom:1px solid var(--border); padding:6px 0 8px 0; }
+.header-row{ display:flex; align-items:center; gap:16px; }
+.header-row img{ max-height:48px; width:auto; }
 .header-user{ margin-left:auto; font-size:0.9rem; color:#555; }
 .separator{ border-bottom:1px solid var(--border); margin:6px 0 10px 0; }
 .win-badge{ display:inline-block; padding:2px 6px; border-radius:6px; background: var(--lightok); color: var(--ok); font-weight:600; margin-left:8px; }
@@ -51,7 +52,6 @@ def now_iso()->str:
     return datetime.now().isoformat(timespec="seconds")
 
 def sha(pin:str)->str:
-    # hash simple para PIN (no criptográfico; suficiente para este caso)
     import hashlib
     return hashlib.sha256(pin.encode("utf-8")).hexdigest()
 
@@ -107,7 +107,7 @@ class GitHubDataRepo:
             self.owner  = st.secrets["github"]["owner"]
             self.repo   = st.secrets["github"]["repo"]
             self.branch = st.secrets["github"].get("branch","main")
-        except Exception as e:
+        except Exception:
             st.error("Faltan secrets de GitHub. Configura [github] en Secrets.")
             raise
 
@@ -125,11 +125,9 @@ class GitHubDataRepo:
         content = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
         gh_put_file(self.owner, self.repo, path, self.branch, self.token, content, msg, sha_old=sha0)
 
-    # archivos base
     def load_users(self)->List[Dict[str,Any]]:
         users, _ = self._load_json("users.json")
         if users is None:
-            # bootstrap
             users = [{
                 "username":"ADMIN","pin_hash":sha("199601"),
                 "role":"SUPER_ADMIN","created_at":now_iso(),"active":True
@@ -174,7 +172,6 @@ class GitHubDataRepo:
             snap_path = f"tournaments/{tid}/snapshots/{ts}.json"
             self._save_json(snap_path, obj, f"snapshot {tid} {ts}")
 
-# Wrapper singleton
 _repo_singleton = None
 def _data_repo()->GitHubDataRepo:
     global _repo_singleton
@@ -182,7 +179,6 @@ def _data_repo()->GitHubDataRepo:
         _repo_singleton = GitHubDataRepo()
     return _repo_singleton
 
-# Atajos
 def load_users(): return _data_repo().load_users()
 def save_users(u): _data_repo().save_users(u)
 def load_app_config(): return _data_repo().load_app_config()
@@ -196,23 +192,21 @@ def save_tournament(tid,obj,make_snapshot=True): _data_repo().save_tournament(ti
 # ====== HEADER / BRAND  =====
 # ============================
 def render_header_bar(username:str, role:str, logo_url:str):
-    cols = st.columns([1,5,3])
-    with cols[0]:
+    st.markdown('<div class="header-wrap"><div class="header-row">', unsafe_allow_html=True)
+    left, right = st.columns([6,6])
+    with left:
         if logo_url:
-            st.markdown(
-                f'<div class="header-wrap"><img src="{logo_url}" alt="logo" /></div>',
-                unsafe_allow_html=True
-            )
+            st.markdown(f'<img src="{logo_url}" alt="logo" />', unsafe_allow_html=True)
         else:
-            st.markdown('<div class="header-wrap">Iapps Pádel</div>', unsafe_allow_html=True)
-    with cols[1]:
-        st.markdown("<div class='separator'></div>", unsafe_allow_html=True)
-    with cols[2]:
+            st.markdown('<b>Iapps Pádel</b>', unsafe_allow_html=True)
+    with right:
         if username:
             st.markdown(f"<div class='header-user'>Usuario: <b>{username}</b> — Rol: <code>{role}</code></div>", unsafe_allow_html=True)
-            if st.button("Cerrar sesión", key="logout_btn"):
+            if st.button("Cerrar sesión"):
                 st.session_state["auth_user"]=None
+                st.session_state.pop("current_tid", None)
                 st.rerun()
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
 def render_header(user=None):
     cfg = load_app_config()
@@ -317,7 +311,6 @@ def build_fixtures(groups:List[List[str]])->List[Dict[str,Any]]:
     for zi, group in enumerate(groups, start=1):
         zone=f"Z{zi}"
         g=group[:]
-        # round robin simple
         for i in range(len(g)):
             for j in range(i+1,len(g)):
                 fixtures.append({
@@ -326,7 +319,7 @@ def build_fixtures(groups:List[List[str]])->List[Dict[str,Any]]:
                 })
     return fixtures
 
-# ====== Validación / Estadísticos de Sets ======
+# ====== Validación / Estadísticos ======
 def m_best_of(fmt:str)->int:
     return 1 if fmt=="one_set" else (3 if fmt=="best_of_3" else 5)
 
@@ -340,9 +333,6 @@ def validate_sets(fmt:str, sets:List[Dict[str,int]])->Tuple[bool,str]:
         if a==b: return False,"No puede haber sets empatados."
         if a>b: s1+=1
         else: s2+=1
-        if s1>best_of//2 or s2>best_of//2:
-            # ya hay ganador, puedes truncar si el usuario cargó demás
-            pass
     if s1==s2: return False,"Debe haber ganador en sets."
     return True,"OK"
 
@@ -363,7 +353,6 @@ def match_has_winner(sets:List[Dict[str,int]])->bool:
 # ====== Tablas por zona ======
 def standings_from_results(zone:str, group:List[str], results:List[Dict[str,Any]], cfg:Dict[str,Any], seeded_set:Optional[set]=None)->pd.DataFrame:
     seeded_set = seeded_set or set()
-    # init
     rows={p:{"Zona":zone,"Pareja":p,"PJ":0,"PG":0,"PP":0,"GF":0,"GC":0,"DG":0,"GP":0,"PTS":0,"Seed":(p in seeded_set)} for p in group}
     for m in results:
         if m["zone"]!=zone or not m.get("sets"): continue
@@ -386,15 +375,12 @@ def standings_from_results(zone:str, group:List[str], results:List[Dict[str,Any]
             rows[p2]["PTS"]+=int(cfg.get("points_win",2)); rows[p1]["PTS"]+=int(cfg.get("points_loss",0))
     df=pd.DataFrame(list(rows.values()))
     if df.empty: return df
-    df["Pos"]=range(1,len(df)+1)
     df=df.sort_values(by=["PTS","DG","GP"], ascending=[False,False,False])
     df["Pos"]=range(1,len(df)+1)
-    # Marca visual para seed
     df["Pareja"] = df.apply(lambda r: f"🔴 {r['Pareja']}" if r.get("Seed") else r["Pareja"], axis=1)
     return df
 
 def zone_complete(zone:str, results:List[Dict[str,Any]], fmt:str)->bool:
-    # completa si todos los partidos de la zona tienen ganador
     for m in results:
         if m["zone"]!=zone: continue
         if not m.get("sets"): return False
@@ -405,9 +391,8 @@ def qualified_from_tables(zone_tables:List[pd.DataFrame], top:int)->List[str]:
     out=[]
     for df in zone_tables:
         if df is None or df.empty: continue
-        k = min(top, len(df))
+        k=min(top,len(df))
         out += list(df.sort_values(by=["PTS","DG","GP"], ascending=[False,False,False]).head(k)["Pareja"])
-    # remover el posible prefijo de seed "🔴 "
     out = [p[2:].strip() if p.startswith("🔴") else p for p in out]
     return out
 
@@ -443,25 +428,20 @@ def ensure_match_ids(matches:List[Dict[str,Any]]):
 
 def build_initial_ko(qualified:List[str], best_of_fmt:str)->List[Dict[str,Any]]:
     n = len(qualified)
-    if n<=2:
-        r="FN"; pairs=next_round(qualified)
-    elif n<=4:
-        r="SF"; pairs=next_round(qualified)
-    elif n<=8:
-        r="QF"; pairs=next_round(qualified)
-    elif n<=16:
-        r="R16"; pairs=next_round(qualified)
-    else:
-        r="R32"; pairs=next_round(qualified)
-    labels = round_labels_map(r, len(pairs))
-    best = m_best_of(best_of_fmt)
+    if n<=2:    r="FN"
+    elif n<=4:  r="SF"
+    elif n<=8:  r="QF"
+    elif n<=16: r="R16"
+    else:       r="R32"
+    pairs=next_round(qualified)
+    labels=round_labels_map(r,len(pairs))
+    best=m_best_of(best_of_fmt)
     out=[]
     for i,(a,b) in enumerate(pairs):
-        lab = labels[i] if i<len(labels) else f"{r}-{i+1}"
-        out.append({"round":r, "label":lab, "a":a, "b":b or "BYE", "sets":[], "goldenA":0, "goldenB":0, "best_of":best})
+        lab=labels[i] if i<len(labels) else f"{r}-{i+1}"
+        out.append({"round":r,"label":lab,"a":a,"b":b or "BYE","sets":[],"goldenA":0,"goldenB":0,"best_of":best})
     return out
 
-# Guardado atómico de KO con verificación
 def save_ko_match_atomic(tid_: str, mid: str, new_sets: List[Dict[str,int]], g1: int, g2: int, max_retries:int=6) -> bool:
     for attempt in range(max_retries):
         fresh = load_tournament(tid_) or {}
@@ -476,7 +456,7 @@ def save_ko_match_atomic(tid_: str, mid: str, new_sets: List[Dict[str,int]], g1:
         try:
             save_tournament(tid_,fresh, make_snapshot=True)
         except RuntimeError:
-            pass  # conflicto → reintenta
+            pass
         verify = load_tournament(tid_) or {}
         vko = verify.get("ko", {}).get("matches", [])
         persisted=False
@@ -516,9 +496,9 @@ def super_admin_panel():
 
     with st.expander("🎨 Apariencia (Logo global y dominio público)", expanded=True):
         app_cfg=load_app_config()
-        url = st.text_input("URL pública del logotipo (RAW de GitHub recomendado)", value=app_cfg.get("app_logo_url",""), key="sa_logo_url").strip()
-        base = st.text_input("Dominio base de la app (para link público)", value=app_cfg.get("app_base_url",""), key="sa_base_url").strip()
-        if st.button("Guardar apariencia", type="primary", key="sa_save_brand"):
+        url = st.text_input("URL pública del logotipo (RAW de GitHub recomendado)", value=app_cfg.get("app_logo_url","")).strip()
+        base = st.text_input("Dominio base de la app (para link público)", value=app_cfg.get("app_base_url","")).strip()
+        if st.button("Guardar apariencia", type="primary"):
             app_cfg["app_logo_url"] = url
             app_cfg["app_base_url"] = base or app_cfg.get("app_base_url","")
             save_app_config(app_cfg)
@@ -530,14 +510,14 @@ def super_admin_panel():
     users = load_users()
     with st.form("create_user_form", clear_on_submit=True):
         c1,c2,c3,c4 = st.columns([3,2,2,3])
-        with c1: new_u = st.text_input("Username nuevo", key="new_u").strip()
-        with c2: new_role = st.selectbox("Rol", ["TOURNAMENT_ADMIN","VIEWER"], key="new_role")
-        with c3: new_pin = st.text_input("PIN inicial (6 dígitos)", max_chars=6, key="new_pin")
+        with c1: new_u = st.text_input("Username nuevo").strip()
+        with c2: new_role = st.selectbox("Rol", ["TOURNAMENT_ADMIN","VIEWER"])
+        with c3: new_pin = st.text_input("PIN inicial (6 dígitos)", max_chars=6)
         assigned_admin = None
         with c4:
             if new_role == "VIEWER":
                 admins=[x["username"] for x in users if x["role"]=="TOURNAMENT_ADMIN" and x.get("active",True)]
-                assigned_admin = st.selectbox("Asignar a admin", admins, key="new_assigned") if admins else None
+                assigned_admin = st.selectbox("Asignar a admin", admins) if admins else None
         subm = st.form_submit_button("Crear usuario", type="primary")
         if subm:
             if not new_u:
@@ -562,34 +542,26 @@ def super_admin_panel():
                     f"Rol de {usr['username']}",
                     ["SUPER_ADMIN","TOURNAMENT_ADMIN","VIEWER"],
                     index=["SUPER_ADMIN","TOURNAMENT_ADMIN","VIEWER"].index(usr["role"]),
-                    key=f"role_{usr['username']}",
                     disabled=(usr["username"]=="ADMIN")
                 )
             with c2:
                 if new_role=="VIEWER" or usr["role"]=="VIEWER":
                     admins=[x["username"] for x in users if x["role"]=="TOURNAMENT_ADMIN" and x.get("active",True)]
-                    default_idx = len(admins)
-                    if usr.get("assigned_admin") in admins:
-                        default_idx = admins.index(usr.get("assigned_admin"))
-                    new_assigned = st.selectbox(
-                        f"Admin asignado ({usr['username']})",
-                        admins + [None],
-                        index=default_idx,
-                        key=f"ass_{usr['username']}"
-                    )
+                    default_idx = admins.index(usr.get("assigned_admin")) if usr.get("assigned_admin") in admins else len(admins)
+                    new_assigned = st.selectbox(f"Admin asignado ({usr['username']})", admins + [None], index=default_idx)
                 else:
                     new_assigned = None
                     st.caption("—")
             with c3:
-                active_toggle = st.checkbox("Activo", value=usr.get("active",True), key=f"act_{usr['username']}")
+                active_toggle = st.checkbox("Activo", value=usr.get("active",True))
             with c4:
                 if usr["username"]=="ADMIN":
                     st.caption("PIN de ADMIN fijo en 199601 (no editable).")
                     pin_value = None
                 else:
-                    pin_value = st.text_input(f"Nuevo PIN ({usr['username']}) (opcional)", max_chars=6, key=f"pin_{usr['username']}")
+                    pin_value = st.text_input(f"Nuevo PIN ({usr['username']}) (opcional)", max_chars=6)
             with c5:
-                if st.button(f"💾 Guardar {usr['username']}", key=f"save_{usr['username']}"):
+                if st.button(f"💾 Guardar {usr['username']}"):
                     if usr["username"]=="ADMIN":
                         usr["role"] = "SUPER_ADMIN"
                         usr["pin_hash"] = sha("199601")
@@ -615,6 +587,13 @@ def tournament_manager(user:Dict[str,Any], tid:str):
     state=load_tournament(tid)
     if not state:
         st.error("No se encontró el torneo."); return
+
+    # Botón volver → limpia current_tid
+    cols_back = st.columns([1,9])
+    with cols_back[0]:
+        if st.button("⬅ Volver"):
+            st.session_state.pop("current_tid", None)
+            st.rerun()
 
     cfg=state.get("config",DEFAULT_CONFIG.copy())
     tab_cfg, tab_pairs, tab_results, tab_tables, tab_ko = st.tabs(["⚙️ Configuración","👥 Parejas","📝 Resultados","📊 Tablas","🏁 Playoffs"])
@@ -701,7 +680,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                 with c1: st.text_input("N°", value=(str(next_n) if next_n else "—"), disabled=True, key=f"pnum_{tid}")
                 with c2: p1=st.text_input("Jugador 1", key=f"p1_{tid}")
                 with c3: p2=st.text_input("Jugador 2", key=f"p2_{tid}")
-                subm=st.form_submit_button("Agregar", type="primary", disabled=(next_n is None), key=f"padd_{tid}")
+                subm=st.form_submit_button("Agregar", type="primary", disabled=(next_n is None))
                 if subm:
                     p1c,p2c=(p1 or "").strip(),(p2 or "").strip()
                     if not p1c or not p2c: st.error("Completá ambos nombres.")
@@ -809,7 +788,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                         gC,gD,_=st.columns([1,1,1])
                         with gC: g1=st.number_input(f"Puntos de oro {m['pair1']}",0,200,int(m.get("golden1",0)),key=f"g1_{form_key}")
                         with gD: g2=st.number_input(f"Puntos de oro {m['pair2']}",0,200,int(m.get("golden2",0)),key=f"g2_{form_key}")
-                        submitted=st.form_submit_button("Guardar este partido", key=f"btn_{form_key}")
+                        submitted=st.form_submit_button("Guardar este partido")
                         if submitted:
                             stats=compute_sets_stats(new_sets)
                             if stats["sets1"]==stats["sets2"]:
@@ -846,7 +825,6 @@ def tournament_manager(user:Dict[str,Any], tid:str):
         if not state.get("groups") or not state.get("results"):
             st.info("Necesitas tener zonas y resultados para definir clasificados.")
         else:
-            # crear ronda inicial si corresponde
             fmt=state["config"].get("format","best_of_3")
             all_complete=all(zone_complete(f"Z{zi}",state["results"],fmt) for zi in range(1,len(state["groups"])+1))
             if all_complete and not state["ko"]["matches"]:
@@ -906,7 +884,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                         g1=st.number_input(f"Puntos de oro {match['a']}",0,200,int(match.get("goldenA",0)), key=ko_widget_key(tid,mid,"ko_g1"))
                     with gD:
                         g2=st.number_input(f"Puntos de oro {match['b']}",0,200,int(match.get("goldenB",0)), key=ko_widget_key(tid,mid,"ko_g2"))
-                    submitted=st.form_submit_button("Guardar este partido KO", key=ko_widget_key(tid,mid,"ko_save"))
+                    submitted=st.form_submit_button("Guardar este partido KO")
                     if submitted:
                         stats=compute_sets_stats(new_sets)
                         if stats["sets1"]==stats["sets2"]:
@@ -916,7 +894,9 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                             st.info("Guardando, por favor espera…"); st.stop()
                         st.session_state[saving_key] = True
                         with st.spinner("Guardando partido KO…"):
-                            ok = save_ko_match_atomic(tid, mid, new_sets, g1, g2, max_retries=6)
+                            ok = save_ko_match_atomic(tid, mid, new_sets, int(match.get("goldenA",0)), int(match.get("goldenB",0)), max_retries=6)
+                            # Nota: goldenA/B se sobreescriben abajo con g1/g2 reales
+                            ok = save_ko_match_atomic(tid, mid, new_sets, int(st.session_state[ko_widget_key(tid,mid,"ko_g1")]), int(st.session_state[ko_widget_key(tid,mid,"ko_g2")]), max_retries=6)
                         st.session_state[saving_key] = False
                         if not ok:
                             st.error("No se pudo confirmar el guardado tras varios intentos. Recargá e intentá nuevamente.")
@@ -964,7 +944,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                 save_tournament(tid,state)
                 st.info("Ronda siguiente preparada."); st.rerun()
 
-            # Campeón (si hay final resuelta)
+            # Campeón
             finals=[m for m in state["ko"]["matches"] if m.get("round")=="FN"]
             for fm in finals:
                 sets=fm.get("sets",[])
@@ -1026,6 +1006,12 @@ def viewer_tournament(tid:str, public:bool=False):
 def admin_dashboard(user:Dict[str,Any]):
     render_header(user)
     st.header(f"Torneos de {user['username']}")
+
+    # Si ya hay un torneo abierto, vamos directo al manager (evita render doble)
+    if st.session_state.get("current_tid"):
+        tournament_manager(user, st.session_state["current_tid"])
+        return
+
     with st.expander("➕ Crear torneo nuevo", expanded=True):
         c1, c2, c3, c4 = st.columns(4)
         with c1: t_name = st.text_input("Nombre del torneo", value="Open Pádel", key="create_t_name")
@@ -1047,7 +1033,8 @@ def admin_dashboard(user:Dict[str,Any]):
     c1,c2,c3=st.columns(3)
     with c1:
         if st.button("Abrir torneo", key="open_t"):
-            tournament_manager(user, sel["tournament_id"]); st.stop()
+            st.session_state["current_tid"] = sel["tournament_id"]
+            st.rerun()
     with c2:
         if st.button("Eliminar torneo", type="secondary", key="del_t"):
             delete_tournament(user["username"], sel["tournament_id"])
@@ -1078,9 +1065,9 @@ def main():
         render_header(None)
         st.markdown("### Ingreso — Usuario + PIN (6 dígitos)")
         with st.form("login", clear_on_submit=True):
-            username=st.text_input("Usuario", key="login_user").strip()
-            pin=st.text_input("PIN (6 dígitos)", type="password", key="login_pin").strip()
-            submitted=st.form_submit_button("Ingresar", type="primary", key="login_btn")
+            username=st.text_input("Usuario").strip()
+            pin=st.text_input("PIN (6 dígitos)", type="password").strip()
+            submitted=st.form_submit_button("Ingresar", type="primary")
         if submitted:
             user=get_user(username)
             if not user or not user.get("active",True): st.error("Usuario inexistente o inactivo.")
@@ -1101,7 +1088,6 @@ def main():
     if user["role"]=="VIEWER":
         if mode=="public" and _tid: viewer_tournament(_tid, public=True)
         else:
-            # viewer interno: ver torneos del admin asignado
             render_header(user)
             st.header(f"Vista de consulta — {user['username']}")
             if not user.get("assigned_admin"):
