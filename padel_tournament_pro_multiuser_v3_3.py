@@ -1,22 +1,26 @@
-# padel_tournament_pro_v1_1_0.py  —  v1.1.0 (persistencia GitHub integrada)
+# padel_tournament_pro_v1_1_1.py  —  v1.1.1
 # -----------------------------------------------------------------------------
-# • Persistencia en GitHub (repo privado): users.json, app_config.json,
-#   tournaments/index.json, tournaments/{tid}.json + snapshots por torneo.
-# • Control de concurrencia (sha) para evitar "pisadas" en guardados.
-# • UI y lógica: login (SUPER_ADMIN / TOURNAMENT_ADMIN / VIEWER),
-#   gestión de usuarios (SUPER_ADMIN), torneos, zonas, resultados por sets
-#   con puntos de oro, tablas, playoffs con progresión automática hasta la final.
+# Persistencia en GitHub (repo privado):
+#   users.json, app_config.json, tournaments/index.json,
+#   tournaments/{tid}.json + tournaments/{tid}/snapshots/YYYYMMDD_HHMMSS.json
+# Correcciones:
+#   • Procesamiento de formularios DENTRO del with st.form(...) en:
+#       - Alta manual de parejas
+#       - Resultados de grupos
+#       - Partidos de Playoffs (KO)
+#   • st.rerun() inmediato tras guardado para refrescar tablas/estado
+#   • Evitar escritura tardía en st.session_state (errores de Streamlit)
 # -----------------------------------------------------------------------------
 
 import streamlit as st
 import pandas as pd
-import requests, base64, hashlib, json, time, uuid, io
+import requests, base64, hashlib, json, time, uuid
 from datetime import datetime, date
 from typing import Dict, Any, List, Optional, Tuple
 from itertools import combinations
 import random
 
-APP_VERSION = "v1.1.0"
+APP_VERSION = "v1.1.1"
 
 # ===========================
 # ====== ESTILOS / UI =======
@@ -61,7 +65,6 @@ def _repo_base(owner: str, repo: str) -> str:
     return f"{GITHUB_API}/repos/{owner}/{repo}"
 
 class GitHubStore:
-    """Acceso simple a contenidos de un repo usando la API de GitHub (contents API)."""
     def __init__(self, owner: str, repo: str, branch: str, token: str):
         self.owner = owner
         self.repo = repo
@@ -113,7 +116,6 @@ class GitHubStore:
         else:
             raise RuntimeError(f"PUT {path} falló: {r.status_code} {r.text}")
 
-    # Helpers JSON
     def get_json(self, path: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         content, sha = self.get_file(path)
         if content is None:
@@ -137,7 +139,6 @@ class DataRepo:
     def __init__(self, store: GitHubStore):
         self.store = store
 
-    # USERS
     def load_users(self) -> List[Dict[str, Any]]:
         data, _sha = self.store.get_json(self.USERS)
         if data is None:
@@ -156,9 +157,8 @@ class DataRepo:
         try:
             self.store.put_json(self.USERS, users, "update users.json", sha=sha)
         except RuntimeError as e:
-            raise RuntimeError("Conflicto al guardar usuarios (estado cambió). Recargá la página.") from e
+            raise RuntimeError("Conflicto al guardar usuarios. Recargá la página.") from e
 
-    # APP CONFIG
     def load_app_config(self) -> Dict[str, Any]:
         data, _ = self.store.get_json(self.APPCFG)
         if data is None:
@@ -177,7 +177,6 @@ class DataRepo:
         except RuntimeError as e:
             raise RuntimeError("Conflicto al guardar app_config. Recargá y reintentá.") from e
 
-    # INDEX
     def load_index(self) -> List[Dict[str, Any]]:
         data, _ = self.store.get_json(self.INDEX)
         if data is None:
@@ -193,7 +192,6 @@ class DataRepo:
         except RuntimeError as e:
             raise RuntimeError("Conflicto al guardar índice de torneos. Recargá y reintentá.") from e
 
-    # TOURNAMENTS
     def tourn_path(self, tid: str) -> str:
         return self.TOURN.format(tid=tid)
 
@@ -211,15 +209,14 @@ class DataRepo:
         try:
             self.store.put_json(path, obj, f"update {path}", sha=sha)
         except RuntimeError as e:
-            raise RuntimeError("Conflicto al guardar el torneo (estado cambió). Recargá la página y reintentá.") from e
+            raise RuntimeError("Conflicto al guardar el torneo. Recargá la página y reintentá.") from e
         if make_snapshot:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             try:
                 self.store.put_json(self.snap_path(tid, ts), obj, f"snapshot {tid} {ts}")
             except Exception:
-                pass  # best-effort
+                pass
 
-# instancia global del repo (cache en sesión)
 def _data_repo():
     if "DATA_REPO" not in st.session_state:
         store = GitHubStore.from_secrets()
@@ -318,7 +315,7 @@ def compute_sets_stats(sets:List[Dict[str,int]])->Dict[str,int]:
     return {"games1":g1,"games2":g2,"sets1":s1,"sets2":s2}
 
 def match_has_winner(sets:List[Dict[str,int]])->bool:
-    stats=compute_sets_stats(sets); return stats["sets1"]!=stats["sets2"]
+    stt=compute_sets_stats(sets); return stt["sets1"]!=stt["sets2"]
 
 def zone_complete(zone_name:str, results_list:List[Dict[str,Any]], fmt:str)->bool:
     ms=[m for m in results_list if m["zone"]==zone_name]
@@ -348,14 +345,14 @@ def standings_from_results(zone_name, group_pairs, results_list, cfg, seeded_set
         table.at[p1,"GP"]+=int(m.get("golden1",0))
         table.at[p2,"GP"]+=int(m.get("golden2",0))
         if s1>s2:
-            table.at[p1,"PG"]+=1; table.at[p2,"PP"]+=1; table.at[p1,"PTS"]+=cfg["points_win"]; table.at[p2,"PTS"]+=cfg["points_loss"]
+            table.at[p1,"PG"]+=1; table.at[p2,"PP"]+=1
+            table.at[p1,"PTS"]+=cfg["points_win"]; table.at[p2,"PTS"]+=cfg["points_loss"]
         else:
-            table.at[p2,"PG"]+=1; table.at[p1,"PP"]+=1; table.at[p2,"PTS"]+=cfg["points_win"]; table.at[p1,"PTS"]+=cfg["points_loss"]
+            table.at[p2,"PG"]+=1; table.at[p1,"PP"]+=1
+            table.at[p2,"PTS"]+=cfg["points_win"]; table.at[p1,"PTS"]+=cfg["points_loss"]
     table["DG"]=table["GF"]-table["GC"]
-
     r=random.Random(int(cfg.get("seed",42)))
-    randmap={p:r.random() for p in table.index}
-    table["RND"]=table.index.map(randmap.get)
+    table["RND"]=table.index.map(lambda p: r.random())
     table=table.sort_values(by=["PTS","DG","GP","RND"],ascending=[False,False,False,False]).reset_index()
     if seeded_set:
         table["Pareja"]=table["pair"].apply(lambda x: f"🔴 {x}" if x in seeded_set else f"{x}")
@@ -383,7 +380,8 @@ def starting_round_name_for(n:int)->str:
 
 def _mid_for(round_name:str,label:str,a:str,b:str)->str:
     base=f"{round_name}::{label}::{a}::{b}"
-    h=hashlib.md5(base.encode("utf-8")).hexdigest()[:10]
+    import hashlib as _h
+    h=_h.md5(base.encode("utf-8")).hexdigest()[:10]
     return f"{round_name}_{h}"
 
 def ensure_match_ids(matches:List[Dict[str,Any]]):
@@ -421,6 +419,7 @@ def build_initial_ko(qualified:List[Tuple[str,int,str]], best_of_fmt:str="best_o
         m={"round":start_round,"label":lab,"a":a,"b":b,"sets":[],"goldenA":0,"goldenB":0,"best_of":m_best_of(best_of_fmt)}
         m["mid"]=_mid_for(start_round,lab,a,b); out.append(m)
     return out
+
 def next_round(slots:List[str]):
     out=[]; i=0
     while i<len(slots):
@@ -435,38 +434,18 @@ def make_next_round_name(current:str)->Optional[str]:
     except ValueError: return None
     return order[i+1]
 
-# =================================================
-# ====== PERSISTENCIA (wrappers hacia GitHub) =====
-# =================================================
+# ===== Wrappers de persistencia =====
 def _repo(): return _data_repo()
+def load_users()->List[Dict[str,Any]]: return _repo().load_users()
+def save_users(users:List[Dict[str,Any]]): _repo().save_users(users)
+def load_app_config()->Dict[str,Any]: return _repo().load_app_config()
+def save_app_config(cfg:Dict[str,Any]): _repo().save_app_config(cfg)
+def load_index()->List[Dict[str,Any]]: return _repo().load_index()
+def save_index(idx:List[Dict[str,Any]]): _repo().save_index(idx)
+def load_tournament(tid:str)->Dict[str,Any]: return _repo().load_tournament(tid)
+def save_tournament(tid:str, obj:Dict[str,Any], make_snapshot:bool=True): _repo().save_tournament(tid, obj, make_snapshot=make_snapshot)
 
-def load_users()->List[Dict[str,Any]]:
-    return _repo().load_users()
-
-def save_users(users:List[Dict[str,Any]]):
-    _repo().save_users(users)
-
-def load_app_config()->Dict[str,Any]:
-    return _repo().load_app_config()
-
-def save_app_config(cfg:Dict[str,Any]):
-    _repo().save_app_config(cfg)
-
-def load_index()->List[Dict[str,Any]]:
-    return _repo().load_index()
-
-def save_index(idx:List[Dict[str,Any]]):
-    _repo().save_index(idx)
-
-def load_tournament(tid:str)->Dict[str,Any]:
-    return _repo().load_tournament(tid)
-
-def save_tournament(tid:str, obj:Dict[str,Any], make_snapshot:bool=True):
-    _repo().save_tournament(tid, obj, make_snapshot=make_snapshot)
-
-# ===================================
-# ====== UTILIDAD / AUTENTICACIÓN ===
-# ===================================
+# ===== Autenticación y header =====
 def render_header(user=None):
     cfg=load_app_config()
     logo=cfg.get("app_logo_url","")
@@ -488,15 +467,12 @@ def set_user(user:Dict[str,Any]):
             users[i]=user; save_users(users); return
     users.append(user); save_users(users)
 
-# ============================
-# ====== SUPER ADMIN UI ======
-# ============================
+# ===== SUPER ADMIN =====
 def super_admin_panel():
     user = st.session_state["auth_user"]
     render_header(user)
     st.header("👑 Panel de SUPER ADMIN")
 
-    # Apariencia
     with st.expander("🎨 Apariencia (Logo global y dominio público)", expanded=True):
         app_cfg=load_app_config()
         url = st.text_input("URL pública del logotipo (RAW de GitHub recomendado)", value=app_cfg.get("app_logo_url","")).strip()
@@ -587,6 +563,231 @@ def super_admin_panel():
                     usr["active"] = bool(active_toggle)
                     set_user(usr)
                     st.success("Cambios guardados.")
+
+    st.caption(f"Iapps Padel Tournament · iAPPs Pádel — {APP_VERSION}")
+
+# ===== ADMIN (torneos) =====
+def load_index_for_admin(admin_username:str)->List[Dict[str,Any]]:
+    idx=load_index(); my=[t for t in idx if t.get("admin_username")==admin_username]
+    def keyf(t):
+        try: return datetime.fromisoformat(t.get("date"))
+        except Exception: return datetime.min
+    return sorted(my, key=keyf, reverse=True)
+
+def create_tournament(admin_username:str, t_name:str, place:str, tdate:str, gender:str)->str:
+    tid=str(uuid.uuid4())[:8]
+    meta={"tournament_id":tid,"t_name":t_name,"place":place,"date":tdate,"gender":gender}
+    state={
+        "meta":{**meta,"admin_username":admin_username,"created_at":now_iso()},
+        "config":{
+            "t_name":t_name,"num_pairs":16,"num_zones":4,"top_per_zone":2,
+            "points_win":2,"points_loss":0,"seed":42,"format":"best_of_3","use_seeds":False
+        },
+        "pairs":[],
+        "groups":None,
+        "results":[],
+        "ko":{"matches":[]},
+        "seeded_pairs":[]
+    }
+    save_tournament(tid,state)
+    idx=load_index()
+    idx.append({"tournament_id":tid,"t_name":t_name,"place":place,"date":tdate,"gender":gender,"admin_username":admin_username,"created_at":now_iso()})
+    save_index(idx)
+    return tid
+
+def delete_tournament(admin_username:str, tid:str):
+    idx=load_index()
+    idx=[t for t in idx if not (t["tournament_id"]==tid and t["admin_username"]==admin_username)]
+    save_index(idx)
+    st.info("El archivo del torneo queda en el repo de datos (histórico). Si lo deseás, borralo manualmente allí.")
+
+def parse_pair_number(label:str)->Optional[int]:
+    try:
+        left=label.split("—",1)[0].strip()
+        return int(left)
+    except Exception:
+        return None
+
+def next_available_number(pairs:List[str], max_pairs:int)->Optional[int]:
+    used=set()
+    for p in pairs:
+        n=parse_pair_number(p)
+        if n is not None: used.add(n)
+    for n in range(1, max_pairs+1):
+        if n not in used: return n
+    return None
+
+def format_pair_label(n:int, j1:str, j2:str)->str:
+    return f"{n:02d} — {j1.strip()} / {j2.strip()}"
+def next_round(slots:List[str]):
+    out=[]; i=0
+    while i<len(slots):
+        if i+1<len(slots): out.append((slots[i],slots[i+1])); i+=2
+        else: out.append((slots[i],None)); i+=1
+    return out
+
+def make_next_round_name(current:str)->Optional[str]:
+    order=["R32","R16","QF","SF","FN"]
+    if current=="FN": return None
+    try: i=order.index(current)
+    except ValueError: return None
+    return order[i+1]
+
+# =================================================
+# ====== PERSISTENCIA (wrappers hacia GitHub) =====
+# =================================================
+def _repo(): return _data_repo()
+
+def load_users()->List[Dict[str,Any]]:
+    return _repo().load_users()
+
+def save_users(users:List[Dict[str,Any]]):
+    _repo().save_users(users)
+
+def load_app_config()->Dict[str,Any]:
+    return _repo().load_app_config()
+
+def save_app_config(cfg:Dict[str,Any]):
+    _repo().save_app_config(cfg)
+
+def load_index()->List[Dict[str,Any]]:
+    return _repo().load_index()
+
+def save_index(idx:List[Dict[str,Any]]):
+    _repo().save_index(idx)
+
+def load_tournament(tid:str)->Dict[str,Any]:
+    return _repo().load_tournament(tid)
+
+def save_tournament(tid:str, obj:Dict[str,Any], make_snapshot:bool=True):
+    _repo().save_tournament(tid, obj, make_snapshot=make_snapshot)
+
+# ===================================
+# ====== UTILIDAD / AUTENTICACIÓN ===
+# ===================================
+def render_header(user=None):
+    cfg=load_app_config()
+    logo=cfg.get("app_logo_url","")
+    if user:
+        render_header_bar(user.get("username",""), user.get("role",""), logo)
+    else:
+        render_header_bar("", "", logo)
+
+def get_user(username:str)->Optional[Dict[str,Any]]:
+    for u in load_users():
+        if u["username"].lower()==username.lower():
+            return u
+    return None
+
+def set_user(user:Dict[str,Any]):
+    users=load_users()
+    for i,u in enumerate(users):
+        if u["username"].lower()==user["username"].lower():
+            users[i]=user; save_users(users); return
+    users.append(user); save_users(users)
+
+# ============================
+# ====== SUPER ADMIN UI ======
+# ============================
+def super_admin_panel():
+    user = st.session_state["auth_user"]
+    render_header(user)
+    st.header("👑 Panel de SUPER ADMIN")
+
+    # Apariencia
+    with st.expander("🎨 Apariencia (Logo global y dominio público)", expanded=True):
+        app_cfg=load_app_config()
+        url = st.text_input("URL pública del logotipo (RAW de GitHub recomendado)", value=app_cfg.get("app_logo_url","")).strip()
+        base = st.text_input("Dominio base de la app (para link público)", value=app_cfg.get("app_base_url","")).strip()
+        if st.button("Guardar apariencia", type="primary"):
+            app_cfg["app_logo_url"] = url
+            app_cfg["app_base_url"] = base or app_cfg.get("app_base_url","")
+            save_app_config(app_cfg)
+            st.success("Apariencia guardada.")
+
+    st.divider()
+    st.subheader("👥 Gestión de usuarios")
+
+    users = load_users()
+    # Crear usuario (procesado dentro del form)
+    with st.form("create_user_form", clear_on_submit=True):
+        c1,c2,c3,c4 = st.columns([3,2,2,3])
+        with c1: new_u = st.text_input("Username nuevo").strip()
+        with c2: new_role = st.selectbox("Rol", ["TOURNAMENT_ADMIN","VIEWER"])
+        with c3: new_pin = st.text_input("PIN inicial (6 dígitos)", max_chars=6)
+        assigned_admin = None
+        with c4:
+            if new_role == "VIEWER":
+                admins=[x["username"] for x in users if x["role"]=="TOURNAMENT_ADMIN" and x.get("active",True)]
+                assigned_admin = st.selectbox("Asignar a admin", admins) if admins else None
+        subm = st.form_submit_button("Crear usuario", type="primary")
+        if subm:
+            if not new_u:
+                st.error("Username requerido.")
+            elif get_user(new_u):
+                st.error("Ya existe un usuario con ese nombre.")
+            elif len(new_pin)!=6 or not new_pin.isdigit():
+                st.error("PIN inválido.")
+            else:
+                set_user({"username":new_u,"pin_hash":sha(new_pin),"role":new_role,
+                          "assigned_admin":assigned_admin,"created_at":now_iso(),"active":True})
+                st.success(f"Usuario {new_u} creado.")
+                st.rerun()
+
+    st.markdown("### Lista y edición")
+    users = load_users()
+    for usr in users:
+        with st.container(border=True):
+            st.write(f"**{usr['username']}** — rol `{usr['role']}` — activo `{usr.get('active',True)}`")
+            c1,c2,c3,c4,c5 = st.columns([2,2,2,3,2])
+            with c1:
+                new_role = st.selectbox(
+                    f"Rol de {usr['username']}",
+                    ["SUPER_ADMIN","TOURNAMENT_ADMIN","VIEWER"],
+                    index=["SUPER_ADMIN","TOURNAMENT_ADMIN","VIEWER"].index(usr["role"]),
+                    key=f"role_{usr['username']}",
+                    disabled=(usr["username"]=="ADMIN")
+                )
+            with c2:
+                if new_role=="VIEWER" or usr["role"]=="VIEWER":
+                    admins=[x["username"] for x in users if x["role"]=="TOURNAMENT_ADMIN" and x.get("active",True)]
+                    default_idx = len(admins)
+                    if usr.get("assigned_admin") in admins:
+                        default_idx = admins.index(usr.get("assigned_admin"))
+                    new_assigned = st.selectbox(
+                        f"Admin asignado ({usr['username']})",
+                        admins + [None],
+                        index=default_idx,
+                        key=f"ass_{usr['username']}"
+                    )
+                else:
+                    new_assigned = None
+                    st.caption("—")
+            with c3:
+                active_toggle = st.checkbox("Activo", value=usr.get("active",True), key=f"act_{usr['username']}")
+            with c4:
+                if usr["username"]=="ADMIN":
+                    st.caption("PIN de ADMIN fijo en 199601 (no editable).")
+                    pin_value = None
+                else:
+                    pin_value = st.text_input(f"Nuevo PIN ({usr['username']}) (opcional)", max_chars=6, key=f"pin_{usr['username']}")
+            with c5:
+                if st.button(f"💾 Guardar {usr['username']}", key=f"save_{usr['username']}"):
+                    if usr["username"]=="ADMIN":
+                        usr["role"] = "SUPER_ADMIN"
+                        usr["pin_hash"] = sha("199601")
+                    else:
+                        usr["role"] = new_role
+                        if pin_value:
+                            if len(pin_value)==6 and pin_value.isdigit():
+                                usr["pin_hash"] = sha(pin_value)
+                            else:
+                                st.error("PIN inválido (6 dígitos)."); st.stop()
+                        usr["assigned_admin"] = new_assigned if usr["role"]=="VIEWER" else None
+                    usr["active"] = bool(active_toggle)
+                    set_user(usr)
+                    st.success("Cambios guardados.")
+                    st.rerun()
 
     st.caption(f"Iapps Padel Tournament · iAPPs Pádel — {APP_VERSION}")
 
@@ -762,19 +963,21 @@ def tournament_manager(user:Dict[str,Any], tid:str):
         with colL:
             st.markdown("**Alta manual — una pareja por vez**")
             next_n=next_available_number(pairs,max_pairs)
+            # PROCESAR DENTRO DEL FORM (evita pérdida de valores)
             with st.form(f"add_pair_form_{tid}", clear_on_submit=True):
                 c1,c2,c3=st.columns([1,3,3])
                 with c1: st.text_input("N°", value=(str(next_n) if next_n else "—"), disabled=True)
                 with c2: p1=st.text_input("Jugador 1")
                 with c3: p2=st.text_input("Jugador 2")
                 subm=st.form_submit_button("Agregar", type="primary", disabled=(next_n is None))
-            if subm:
-                p1c,p2c=(p1 or "").strip(),(p2 or "").strip()
-                if not p1c or not p2c: st.error("Completá ambos nombres.")
-                else:
-                    label=format_pair_label(next_n,p1c,p2c); pairs.append(label); state["pairs"]=pairs
-                    save_tournament(tid,state)
-                    st.success(f"Agregada: {label}"); st.rerun()
+                if subm:
+                    p1c,p2c=(p1 or "").strip(),(p2 or "").strip()
+                    if not p1c or not p2c: st.error("Completá ambos nombres.")
+                    else:
+                        label=format_pair_label(next_n,p1c,p2c); pairs=state.get("pairs",[]); pairs.append(label); state["pairs"]=pairs
+                        save_tournament(tid,state)
+                        st.success(f"Agregada: {label}")
+                        st.rerun()
             if next_n is None: st.warning(f"Se alcanzó el máximo de parejas ({max_pairs}).")
         with colR:
             st.markdown("**Listado**")
@@ -787,9 +990,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                     with c2: st.write(p)
                     with c3:
                         if st.button("🗑️", key=f"del_{tid}_{p}", help="Eliminar pareja"):
-                            state["pairs"]=[x for x in pairs if x!=p]
-                            save_tournament(tid,state)
-                            st.rerun()
+                            state["pairs"]=[x for x in pairs if x!=p]; save_tournament(tid,state); st.rerun()
 
         st.divider()
         st.subheader("Cabezas de serie")
@@ -802,8 +1003,7 @@ def tournament_manager(user:Dict[str,Any], tid:str):
             if st.button("💾 Guardar cabezas de serie", key=f"save_seeds_{tid}"):
                 if len(selected)!=num_groups: st.error(f"Debes seleccionar exactamente {num_groups}.")
                 else:
-                    state["seeded_pairs"]=selected; save_tournament(tid,state)
-                    st.success("Cabezas de serie guardadas.")
+                    state["seeded_pairs"]=selected; save_tournament(tid,state); st.success("Cabezas de serie guardadas.")
         else:
             st.info("El torneo no usa cabezas de serie (activá la opción en Configuración).")
 
@@ -855,7 +1055,8 @@ def tournament_manager(user:Dict[str,Any], tid:str):
                     cur_sets=m.get("sets",[])
                     n_min,n_max=(1,1) if fmt=="one_set" else ((2,3) if fmt=="best_of_3" else (3,5))
                     form_key=f"grp_form__{tid}__{m['zone']}__{m['pair1']}__{m['pair2']}"
-                    with st.form(form_key):
+                    # PARCHE: procesar dentro del form y guardar ahí
+                    with st.form(form_key, clear_on_submit=False):
                         cN,_,_=st.columns([1,1,1])
                         with cN:
                             n_sets=st.number_input("Sets jugados", min_value=n_min, max_value=n_max,
@@ -987,7 +1188,8 @@ def tournament_manager(user:Dict[str,Any], tid:str):
         st.markdown(title, unsafe_allow_html=True)
 
         form_key=f"ko_form__{tid_}__{mid}"
-        with st.form(form_key):
+        # PARCHE: procesar y guardar dentro del form
+        with st.form(form_key, clear_on_submit=False):
             cN,_,_=st.columns([1,1,1])
             with cN:
                 n_sets=st.number_input("Sets jugados", min_value=n_min, max_value=n_max,
